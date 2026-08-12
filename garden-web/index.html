@@ -1,0 +1,1228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#5b8f5b">
+<title>迷你小院子</title>
+<style>
+:root {
+  --green-deep: #3d6b4f;
+  --green: #5b8f5b;
+  --green-soft: #8fbc8f;
+  --green-pale: #dcead2;
+  --cream: #fffdf6;
+  --paper: #faf6ec;
+  --ink: #474a40;
+  --ink-soft: #8a8d7c;
+  --line: #ebe4d0;
+  --accent: #e8a05c;
+  --danger: #d9705f;
+  --shadow: 0 6px 18px rgba(84, 96, 66, .12);
+  --radius: 20px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; }
+html { font-size: 16px; }
+body {
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  background: linear-gradient(180deg, #eef2dc 0%, var(--paper) 60%, #f4f1e2 100%);
+  color: var(--ink);
+  display: flex; flex-direction: column;
+  overflow-x: hidden;
+}
+
+/* ============ 晨昏钟（衬线大时钟，满幅页首）============ */
+#hero {
+  position: relative;
+  flex: none;
+  padding: 22px 18px 4px;
+  text-align: center;
+}
+#hero .period {
+  font-size: .68rem; letter-spacing: .32em; color: var(--ink-soft);
+  text-transform: uppercase; font-weight: 500;
+}
+#hero .period .cn { letter-spacing: .2em; margin-right: 8px; }
+#hero .bigtime {
+  margin-top: 2px;
+  font-family: Georgia, "Times New Roman", "Songti SC", serif;
+  font-weight: 400;
+  font-size: 3.6rem;
+  line-height: 1.05;
+  color: var(--ink);
+  letter-spacing: .01em;
+  font-variant-numeric: tabular-nums;
+}
+#hero .bigtime .ampm {
+  font-size: 1.15rem; margin-left: 4px;
+  font-style: italic; color: var(--ink-soft);
+}
+#hero .heroline {
+  margin-top: 4px;
+  font-size: .72rem; color: var(--ink-soft); letter-spacing: .06em;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+#hero .wx { transform: scale(.9); transform-origin: center; }
+/* 迷你天气图标（纯 CSS） */
+.wx { flex: none; width: 26px; height: 20px; position: relative; }
+.wx .sun-disc { position: absolute; top: 2px; left: 5px; width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #ffe89a, #ffc94d 75%); box-shadow: 0 0 0 3px rgba(255,201,77,.22), 0 0 8px 2px rgba(255,201,77,.45); }
+.wx .moon-disc { position: absolute; top: 2px; left: 6px; width: 15px; height: 15px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fcfbe9, #e6e4c4 75%); box-shadow: 0 0 6px 2px rgba(230,228,196,.5); }
+.wx .moon-disc::after { content: ""; position: absolute; top: -2px; right: -4px; width: 12px; height: 12px; border-radius: 50%; background: rgba(255,253,246,.95); }
+.wx .cloud-i { position: absolute; top: 8px; left: 3px; width: 20px; height: 8px; border-radius: 999px; background: linear-gradient(180deg, #ffffff, #e9ecf0); box-shadow: 0 1px 3px rgba(90,100,110,.18); }
+.wx .cloud-i::before { content: ""; position: absolute; top: -5px; left: 4px; width: 10px; height: 10px; border-radius: 50%; background: inherit; }
+.wx .cloud-i::after { content: ""; position: absolute; top: -3px; left: 11px; width: 8px; height: 8px; border-radius: 50%; background: inherit; }
+.wx .rain-i { position: absolute; width: 1.5px; height: 5px; border-radius: 2px; background: linear-gradient(180deg, #8fc3e8, #5b9ed6); }
+.wx .r1 { left: 7px; top: 16px; } .wx .r2 { left: 12px; top: 14px; } .wx .r3 { left: 17px; top: 16px; }
+.wx .snow-i { position: absolute; width: 3.5px; height: 3.5px; border-radius: 50%; background: #dbe6f0; box-shadow: 0 0 3px rgba(190,205,220,.9); }
+.wx .s1 { left: 7px; top: 16px; } .wx .s2 { left: 12px; top: 14px; } .wx .s3 { left: 17px; top: 16px; }
+
+/* ============ 院子全景（主舞台）============ */
+#stage {
+  flex: 1;
+  display: flex; flex-direction: column; justify-content: center;
+  max-width: 460px; width: 100%;
+  margin: 0 auto;
+  padding: 8px 12px 0;
+  position: relative;
+}
+#scene {
+  position: relative;
+  isolation: isolate;  /* 场景自成层叠上下文，里面的贴纸再高的 z-index 也飞不出去 */
+  width: min(100%, calc(100svh - 152px - 104px));
+  margin: 0 auto;
+  aspect-ratio: 1 / 1;
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--green-pale) url("assets/sheet1.png") center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px rgba(61,107,79,.16), var(--shadow);
+}
+.scene-sprite {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  transition: left 1.6s ease-in-out, top 1.6s ease-in-out, filter 1.5s;
+  cursor: pointer;
+  filter: drop-shadow(0 1.5px 0 rgba(255,255,255,.85)) drop-shadow(0 0 1px rgba(255,255,255,.6)) drop-shadow(2px 4px 5px rgba(60,50,30,.28));
+  user-select: none; -webkit-user-drag: none;
+  pointer-events: auto;
+}
+.scene-sprite:active { transform: translate(-50%, -100%) scale(.96); }
+#scene .tint { position: absolute; inset: 0; pointer-events: none; z-index: 500; transition: background 1.5s, backdrop-filter 1.5s; }
+#scene.tint-dawn  .tint { background: rgba(255,190,120,.14); }
+#scene.tint-dusk  .tint { background: rgba(240,140,80,.18); }
+#scene.tint-night .tint { background: rgba(20,32,64,.42); backdrop-filter: saturate(.72) brightness(.92); }
+#scene .scene-rain { position: absolute; inset: 0; pointer-events: none; display: none; overflow: hidden; z-index: 501; }
+#scene.raining .scene-rain { display: block; }
+.scene-firefly { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: #fff3a0; box-shadow: 0 0 8px 3px rgba(255,235,130,.8); display: none; animation: twinkle 3.4s ease-in-out infinite; z-index: 490; pointer-events: none; }
+#scene.tint-night .scene-firefly { display: block; }
+.scene-badge {
+  position: absolute; transform: translate(-50%, -50%);
+  font-size: .62rem; padding: 2px 7px; border-radius: 999px;
+  background: rgba(255,255,255,.92); color: var(--green-deep); font-weight: 700;
+  box-shadow: 0 1px 4px rgba(50,60,40,.25); pointer-events: none; z-index: 480;
+  white-space: nowrap;
+}
+.scene-badge.cond { background: #fdeceb; color: var(--danger); animation: pulse2 1.6s infinite; }
+.scene-badge.ready { background: #fff3d6; color: #b0722a; animation: pulse2 1.6s infinite; }
+@keyframes pulse2 { 0%,100% { transform: translate(-50%,-50%) scale(1);} 50% { transform: translate(-50%,-50%) scale(1.07);} }
+.scene-plotzone { position: absolute; transform: translate(-50%,-50%); cursor: pointer; z-index: 470; border-radius: 12px; }
+/* 实物热点：门廊篮子 / 邮箱手账 */
+.scene-prop { position: absolute; transform: translate(-50%,-50%); cursor: pointer; z-index: 475; border-radius: 50%; }
+.scene-prop::after {
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: rgba(255, 255, 255, 0);
+  transition: background .25s;
+}
+.scene-prop:active::after { background: rgba(255, 255, 255, .25); }
+
+/* ============ 底部浮窗道具栏 ============ */
+#dock {
+  position: relative;
+  z-index: 5;
+  max-width: 460px; width: 100%;
+  margin: 0 auto;
+  padding: 12px 12px calc(14px + env(safe-area-inset-bottom));
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px;
+}
+.dock-group {
+  display: flex; align-items: center; gap: 2px;
+  background: rgba(255, 253, 246, .88);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  padding: 4px 6px;
+}
+.dock-btn {
+  border: none; background: none; cursor: pointer; font-family: inherit;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 12px; border-radius: 999px;
+  font-size: .68rem; color: var(--green-deep); font-weight: 600; letter-spacing: .02em;
+  transition: background .15s;
+}
+.dock-btn:active { background: var(--green-pale); }
+.dock-btn svg { display: block; }
+.dock-action {
+  border: none; cursor: pointer; font-family: inherit;
+  background: var(--green); color: #fff;
+  box-shadow: 0 3px 10px rgba(61, 107, 79, .35);
+  border-radius: 999px; padding: 11px 18px;
+  font-size: .8rem; font-weight: 600; letter-spacing: .04em;
+  display: flex; align-items: center; gap: 6px;
+  transition: transform .12s;
+}
+.dock-action:active { transform: scale(.95); }
+.dock-action.warm { background: var(--accent); box-shadow: 0 3px 10px rgba(210, 140, 70, .38); }
+
+/* ============ 弹层通用内容 ============ */
+#backdrop {
+  position: fixed; inset: 0; background: rgba(58, 66, 50, .38);
+  opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 40;
+  backdrop-filter: blur(2px);
+}
+#backdrop.show { opacity: 1; pointer-events: auto; }
+#sheet {
+  position: fixed; left: 50%; bottom: 0; transform: translate(-50%, 105%);
+  width: 100%; max-width: 460px;
+  background: var(--cream);
+  border-radius: 24px 24px 0 0;
+  padding: 18px 20px calc(20px + env(safe-area-inset-bottom));
+  box-shadow: 0 -10px 34px rgba(60, 70, 50, .25);
+  transition: transform .3s cubic-bezier(.2,.9,.3,1); z-index: 41;
+  max-height: 76vh; overflow-y: auto;
+}
+#sheet.show { transform: translate(-50%, 0); }
+#sheet-grip { width: 42px; height: 4px; border-radius: 999px; background: #e3dcc5; margin: 0 auto 14px; }
+#sheet-close {
+  position: absolute; top: 12px; right: 12px;
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1px solid #e6e0c9; background: #f6f2e2;
+  color: var(--ink-soft); font-size: .9rem; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background .15s, transform .12s;
+}
+#sheet-close:active { background: var(--green-pale); transform: scale(.92); }
+#sheet-title { font-weight: 700; color: var(--green-deep); font-size: 1rem; margin-bottom: 4px; letter-spacing: .03em; padding-right: 36px; }
+#sheet-desc { font-size: .78rem; color: var(--ink-soft); line-height: 1.75; margin-bottom: 13px; }
+#sheet-desc.letter { font-family: "Songti SC", "STSong", "Noto Serif CJK SC", "SimSun", serif; font-size: .88rem; color: #5f5c4b; line-height: 1.95; border-left: 3px solid var(--green-soft); padding-left: 12px; }
+.sheet-actions { display: flex; flex-direction: column; gap: 10px; }
+.sheet-actions .btn { width: 100%; font-size: .88rem; padding: 12px; }
+.option-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-bottom: 13px; }
+.option-chip {
+  border: 1px solid #dfe6cf; border-radius: 15px;
+  background: #fff; padding: 9px 4px; text-align: center;
+  font-size: .76rem; cursor: pointer; color: var(--ink);
+  transition: background .15s, transform .12s;
+}
+.option-chip:active { background: var(--green-pale); transform: scale(.96); }
+.option-chip .big { display: block; font-size: 1.5rem; margin-bottom: 3px; }
+.option-chip .ings { font-size: .6rem; color: var(--ink-soft); margin-top: 2px; }
+
+/* 弹层里的小动物档案 */
+.sheet-animal { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 13px; }
+.a-pic {
+  flex: none; width: 66px; height: 66px; border-radius: 18px;
+  background: radial-gradient(circle at 50% 68%, var(--green-pale), #f3f0df 78%);
+  border: 1px solid #e6e0c9;
+  display: flex; align-items: flex-end; justify-content: center;
+  overflow: hidden;
+}
+.a-pic img { width: 86%; margin-bottom: 2px; filter: drop-shadow(0 2px 2px rgba(80,70,45,.2)); }
+.a-pic .a-e { font-size: 2rem; line-height: 66px; }
+.sheet-animal .animal-body { flex: 1; min-width: 0; }
+.animal-name { font-weight: 700; font-size: .94rem; color: var(--ink); }
+.animal-name .resident { font-size: .66rem; font-weight: 600; color: var(--green); margin-left: 4px; }
+.animal-meta { font-size: .68rem; color: var(--ink-soft); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+.tag { background: #f1efdd; border: 1px solid #e8e2c9; color: #7c7a64; border-radius: 999px; padding: 1px 8px; }
+.bond { margin-top: 7px; font-size: .68rem; color: var(--ink-soft); display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.hearts { letter-spacing: 1.5px; font-size: .78rem; }
+.hearts .fill { color: #ef8ba0; }
+.hearts .empty { color: #ded9c5; }
+.bond-bar { flex: 1; min-width: 52px; height: 5px; background: #efeadb; border-radius: 999px; overflow: hidden; }
+.bond-bar i { display: block; height: 100%; background: linear-gradient(90deg, #f4b6c2, #ef8ba0); border-radius: 999px; }
+.note {
+  margin-top: 9px; font-size: .77rem; line-height: 1.75; color: #716e5e;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", "SimSun", serif;
+  background: #fff; border: 1px solid #ece6d2; border-radius: 3px 13px 13px 13px;
+  padding: 7px 11px;
+}
+
+/* 弹层里的菜畦档案 */
+.sheet-plot { margin-bottom: 13px; }
+.sheet-plot .sp-mid { position: relative; height: 84px; margin: 2px 0 8px; }
+.soil-ellipse {
+  position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%);
+  width: 56%; height: 14px; border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(163,124,87,.5) 0%, rgba(138,103,72,.35) 55%, rgba(138,103,72,0) 80%);
+}
+.crop-img {
+  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+  filter: drop-shadow(1px 2px 2px rgba(80,60,35,.25));
+}
+.crop-img.ready { filter: drop-shadow(1px 2px 2px rgba(80,60,35,.25)) drop-shadow(0 0 9px rgba(255,214,110,.8)); animation: bob 2.4s ease-in-out infinite; }
+@keyframes bob { 0%,100% { transform: translateX(-50%) translateY(0);} 50% { transform: translateX(-50%) translateY(-3px);} }
+.sp-row { font-size: .76rem; color: var(--ink-soft); line-height: 1.8; }
+.sp-row b { color: var(--ink); font-weight: 600; }
+.moisture { margin-top: 4px; height: 5px; border-radius: 999px; background: #eceadb; overflow: hidden; }
+.moisture i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #a5d3ea, #6ba9cf); transition: width .6s; }
+
+/* 篮子 / 手账弹层 */
+.inv-section { margin-bottom: 10px; font-size: .78rem; }
+.inv-section > b { display: block; color: var(--green-deep); font-size: .74rem; letter-spacing: .06em; margin-bottom: 4px; }
+.item-row { display: flex; align-items: center; gap: 8px; font-size: .82rem; padding: 7px 2px; border-bottom: 1px dashed #ebe5d0; }
+.item-row:last-child { border-bottom: none; }
+.item-row .grow { flex: 1; }
+.item-row .count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.gift-list { font-size: .82rem; }
+.gift-row { padding: 8px 2px; border-bottom: 1px dashed #ebe5d0; }
+.gift-row:last-child { border-bottom: none; }
+.gift-name { font-weight: 500; }
+.gift-time { color: var(--ink-soft); font-size: .72rem; margin-left: 8px; }
+.gift-note { color: var(--green-deep); font-size: .76rem; margin-top: 3px; font-style: italic; }
+.chicken-row { width: 100%; border: 0; border-bottom: 1px dashed #ebe5d0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.empty-hint { font-size: .76rem; color: var(--ink-soft); padding: 4px 2px; }
+.quality-tag { display: inline-block; margin-left: 5px; padding: 0 5px; border-radius: 999px; background: #e8dfc8; color: #8a6d3b; font-size: .68rem; font-weight: 600; vertical-align: middle; }
+
+/* ============ 按钮 ============ */
+.btn {
+  border: none; cursor: pointer; font-family: inherit;
+  background: var(--green); color: #fff;
+  font-size: .82rem; font-weight: 600; letter-spacing: .03em;
+  border-radius: 999px; padding: 8px 16px;
+  box-shadow: 0 2px 6px rgba(61,107,79,.3);
+  transition: transform .12s, filter .2s;
+}
+.btn:active { transform: scale(.96); }
+.btn:disabled { filter: grayscale(.5) opacity(.6); }
+.btn.ghosty { background: #eef2e2; color: var(--green-deep); box-shadow: none; border: 1px solid #dfe6cf; }
+.btn.warm { background: var(--accent); box-shadow: 0 2px 6px rgba(210,140,70,.35); }
+.btn.small { font-size: .7rem; padding: 5px 12px; }
+
+/* ============ 结果弹窗 / 加载 ============ */
+#modal {
+  position: fixed; inset: 0; z-index: 50;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(58, 66, 50, .42); backdrop-filter: blur(2px);
+  padding: 24px;
+}
+#modal.show { display: flex; }
+#modal-box {
+  background: var(--cream); border-radius: 22px;
+  max-width: 400px; width: 100%;
+  padding: 24px 20px 20px; text-align: center;
+  box-shadow: 0 16px 48px rgba(45, 60, 45, .35);
+  animation: pop .28s cubic-bezier(.2, 1.4, .4, 1);
+}
+@keyframes pop { from { transform: scale(.82); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+#modal-mark {
+  width: 46px; height: 46px; margin: 0 auto; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #9dc48f, var(--green) 78%);
+  color: #fff; font-size: 1.3rem; line-height: 46px; font-weight: 700;
+  box-shadow: 0 4px 12px rgba(61, 107, 79, .35);
+}
+#modal-mark.busy { background: radial-gradient(circle at 35% 30%, #ffd98a, var(--accent) 78%); box-shadow: 0 4px 12px rgba(210,140,70,.4); }
+#modal-mark.err { background: radial-gradient(circle at 35% 30%, #f2a79a, var(--danger) 78%); box-shadow: 0 4px 12px rgba(217,112,95,.4); }
+.spin { display: inline-block; animation: spin 1.1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#modal-text {
+  margin: 14px 0 18px; font-size: .88rem; line-height: 1.9; color: var(--ink);
+  white-space: pre-wrap; text-align: left;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", "SimSun", serif;
+  background: #fbf8ee; border-radius: 15px; padding: 13px 15px;
+  border: 1px dashed #e5ddc2;
+  max-height: 46vh; overflow-y: auto;
+}
+
+.err-banner { position: fixed; left: 50%; transform: translateX(-50%); bottom: 86px; z-index: 30; width: calc(100% - 28px); max-width: 430px; background: #fdeceb; color: var(--danger); border-radius: 12px; font-size: .76rem; padding: 8px 12px; text-align: center; box-shadow: var(--shadow); }
+
+/* ============ 桌面端：弹层变居中对话框 ============ */
+@media (min-width: 720px) {
+  #sheet {
+    bottom: auto; top: 50%;
+    border-radius: 24px;
+    max-height: 82vh;
+    transform: translate(-50%, -50%) scale(.92);
+    opacity: 0; pointer-events: none;
+    transition: opacity .22s ease, transform .22s cubic-bezier(.2, .9, .3, 1);
+  }
+  #sheet.show { transform: translate(-50%, -50%) scale(1); opacity: 1; pointer-events: auto; }
+  #sheet-grip { display: none; }
+  #sheet-close { top: 14px; right: 14px; }
+}
+</style>
+</head>
+<body>
+
+<div id="hero">
+  <div class="period" id="hero-period"><span class="cn">上午</span>LATE MORNING</div>
+  <div class="bigtime" id="hero-time">--:--<span class="ampm" id="hero-ampm"></span></div>
+  <div class="heroline">
+    <div class="wx" id="wx-slot"><span class="sun-disc"></span></div>
+    <span id="hero-line">看天中…</span>
+  </div>
+</div>
+
+<div id="stage">
+  <div id="scene" class="tint-day">
+    <div class="tint"></div>
+    <div class="scene-rain" id="scene-rain"></div>
+    <div class="scene-firefly" style="top:26%;left:20%"></div>
+    <div class="scene-firefly" style="top:34%;left:88%;animation-delay:1.2s"></div>
+    <div class="scene-firefly" style="top:86%;left:14%;animation-delay:2.1s"></div>
+    <div class="scene-firefly" style="top:90%;left:70%;animation-delay:.6s"></div>
+  </div>
+</div>
+
+<div id="dock">
+  <div class="dock-group">
+    <button class="dock-btn" id="btn-letter">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M5 6.5 12 13l7-6.5M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v10a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 17V7A1.5 1.5 0 0 1 5 5.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+      光景
+    </button>
+    <button class="dock-btn" id="btn-journal">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5V5.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 8h6M9 11.5h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      手账
+    </button>
+    <button class="dock-btn" id="btn-giftbox">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M4 9h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M2.5 6.5h19a.5.5 0 0 1 .5.5v2H2V7a.5.5 0 0 1 .5-.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 6.5V21M8.5 6.5C8.5 5 9.5 3 12 3s3.5 2 3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      礼物盒
+    </button>
+  </div>
+  <button class="dock-action ghosty2" id="btn-stroll2">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="13" cy="4.5" r="2" fill="#fff"/><path d="M13 8.5 10 13l-2.5 6.5M13 8.5l2.5 3 3 1M13 8.5l1.5 5.5.5 5.5M10 13l3 1.5" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    去逛逛
+  </button>
+  <button class="dock-action ghosty2" id="btn-drain" style="display:none">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 13c2 2 4-2 6 0s4-2 6 0 4-2 6 0" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 3.5v9" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/><path d="M8.5 8 12 12.5 15.5 8" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    排水
+  </button>
+  <button class="dock-action warm" id="btn-water-all">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 3.5c3.5 4.5 6 7.8 6 11a6 6 0 1 1-12 0c0-3.2 2.5-6.5 6-11Z" stroke="#fff" stroke-width="1.7" stroke-linejoin="round"/></svg>
+    浇全部
+  </button>
+</div>
+
+<div id="backdrop"></div>
+<div id="sheet">
+  <div id="sheet-grip"></div>
+  <button id="sheet-close" aria-label="关闭">✕</button>
+  <div id="sheet-title"></div>
+  <div id="sheet-desc"></div>
+  <div id="sheet-extra"></div>
+  <div class="sheet-actions" id="sheet-actions"></div>
+</div>
+
+<div id="modal">
+  <div id="modal-box">
+    <div id="modal-mark">✓</div>
+    <div id="modal-text"></div>
+    <button class="btn" id="modal-ok">知道啦</button>
+  </div>
+</div>
+
+<div id="err-slot"></div>
+
+<script>
+/* ================= 基础 ================= */
+const qs = (s) => document.querySelector(s);
+const state = { data: null, refreshing: false, clockBase: 0, clockDrift: 0 };
+// 7/31 旧版曾把长期钥匙留在浏览器；新鉴权上线后一次性清理残留。
+localStorage.removeItem("gardenWebKey");
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  const returnedToLogin = res.redirected && new URL(res.url).pathname === "/login";
+  if (res.status === 401 || res.status === 403 || returnedToLogin) {
+    location.assign("/login");
+    throw new Error("unauthorized");
+  }
+  if (!(res.headers.get("content-type") || "").includes("application/json")) {
+    throw new Error("服务器返回了无法识别的内容");
+  }
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+function showModal(text, kind) {
+  const mark = qs("#modal-mark");
+  mark.className = kind === "busy" ? "busy" : (kind === "err" ? "err" : "");
+  mark.innerHTML = kind === "busy" ? "<span class='spin'>◌</span>" : (kind === "err" ? "✕" : "✓");
+  qs("#modal-text").textContent = text;
+  qs("#modal").classList.add("show");
+}
+qs("#modal-ok").onclick = () => qs("#modal").classList.remove("show");
+
+async function doAction(cmd, loadingText) {
+  try {
+    showModal(loadingText || "正在院子里忙活…", "busy");
+    const r = await api("api/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd }),
+    });
+    // 8/9 事故：后端失败也走 HTTP 200 + {ok:false, text:"…"}，此前只看
+    // text 不看 ok，失败提示被套成功样式弹出，用户以为播种成功了。
+    if (r.ok === false) {
+      showModal(r.text || "执行失败，请再试一次", "err");
+    } else {
+      showModal(r.text || "（完成啦）");
+    }
+    closeSheet();
+    await refresh(true);
+  } catch (e) {
+    showModal("执行失败：" + e.message, "err");
+  }
+}
+
+/* ================= 弹层 ================= */
+function openSheet(title, desc, actions, extra, opts) {
+  opts = opts || {};
+  qs("#sheet-title").textContent = title;
+  const descEl = qs("#sheet-desc");
+  descEl.textContent = desc || "";
+  descEl.className = opts.letter ? "letter" : "";
+  descEl.id = "sheet-desc";
+  qs("#sheet-extra").innerHTML = extra || "";
+  const box = qs("#sheet-actions");
+  box.innerHTML = "";
+  for (const a of actions || []) {
+    const b = document.createElement("button");
+    b.className = "btn" + (a.cls ? " " + a.cls : "");
+    b.textContent = a.label;
+    b.disabled = !!a.disabled;
+    b.onclick = a.onClick;
+    box.appendChild(b);
+  }
+  qs("#backdrop").classList.add("show");
+  qs("#sheet").classList.add("show");
+  qs("#sheet").scrollTop = 0;
+}
+function closeSheet() {
+  qs("#backdrop").classList.remove("show");
+  qs("#sheet").classList.remove("show");
+}
+qs("#backdrop").onclick = closeSheet;
+qs("#sheet-close").onclick = closeSheet;
+
+/* ================= 字典 ================= */
+const CROP_SPRITE = {
+  tomato: { seed: "tomato-1", sprout: "tomato-1", growing: "tomato-2", ready: "tomato-3" },
+  mint: { seed: "mint-1", sprout: "mint-1", growing: "mint-2", ready: "mint-2" },
+};
+function cropSprite(p) {
+  if (!p.crop_id) return null;
+  const m = CROP_SPRITE[p.crop_id];
+  if (!m) return null;
+  return m[p.stage] || m.growing;
+}
+const CROP_EMOJI = {
+  strawberry: "🍓", radish: "🥕", tomato: "🍅", mint: "🌿",
+  cucumber: "🥒", mini_watermelon: "🍉", pepper: "🌶️", pumpkin: "🎃", chinese_cabbage: "🥬",
+};
+const ANIMAL_EMOJI = { "猫": "🐱", "狗": "🐶", "兔子": "🐰", "刺猬": "🦔" };
+const SPECIES_SPRITE = {
+  "橘猫": "cat-orange", "奶牛猫": "cat-cow",
+  "三花猫": "cat-orange", "黑猫": "cat-cow", "白猫": "cat-cow",
+  "荷兰侏儒兔": "rabbit-grey",
+};
+function animalEmoji(a) { return ANIMAL_EMOJI[a.category] || "🐾"; }
+function animalAvatarHtml(a) {
+  const base = SPECIES_SPRITE[a.species];
+  if (base) {
+    const pose = skyClass() === "night" ? "loaf" : "sit";
+    return `<img src="assets/sprites/${base}-${pose}.png" alt="${a.name}">`;
+  }
+  return `<span class="a-e">${animalEmoji(a)}</span>`;
+}
+const FEEDABLE = { "兔子": ["radish", "mint", "pumpkin", "chinese_cabbage"], "狗": ["pumpkin"], "猫": [], "刺猬": [] };
+
+function weatherIconHtml(text, isNight) {
+  const t = text || "";
+  if (/雷/.test(t) || /雨/.test(t)) return '<span class="cloud-i"></span><span class="rain-i r1"></span><span class="rain-i r2"></span><span class="rain-i r3"></span>';
+  if (/雪/.test(t)) return '<span class="cloud-i"></span><span class="snow-i s1"></span><span class="snow-i s2"></span><span class="snow-i s3"></span>';
+  if (/雾|霾|阴|多云/.test(t)) return '<span class="cloud-i"></span>';
+  return isNight ? '<span class="moon-disc"></span>' : '<span class="sun-disc"></span>';
+}
+
+function hourOf() { return new Date(state.data.server_now).getHours(); }
+function skyClass() {
+  const h = hourOf();
+  if (h >= 6 && h < 8) return "dawn";
+  if (h >= 8 && h < 17) return "day";
+  if (h >= 17 && h < 20) return "dusk";
+  return "night";
+}
+function fmtLeft(sec) {
+  if (sec == null) return "";
+  sec = Math.max(0, Math.round(sec));
+  const dd = Math.floor(sec / 86400), hh = Math.floor(sec % 86400 / 3600), mm = Math.floor(sec % 3600 / 60), ss = sec % 60;
+  if (dd > 0) return `${dd}天${hh}小时`;
+  if (hh > 0) return `${hh}小时${mm}分`;
+  if (mm > 0) return `${mm}分${ss}秒`;
+  return `${ss}秒`;
+}
+function cropName(id) {
+  const c = state.data.crop_catalog && state.data.crop_catalog[id];
+  return (c && c.name) || id;
+}
+function recipeName(id) {
+  const r = state.data.recipes && state.data.recipes[id];
+  return (r && r.name) || id;
+}
+function heartsHtml(a) {
+  const total = 5;
+  let pct;
+  if (a.bond_next_points == null) pct = 100;
+  else {
+    const steps = [0, 3, 8, 16, 28, 45];
+    const prev = steps[a.bond_level] || 0;
+    pct = Math.round(100 * (a.bond_points - prev) / Math.max(1, a.bond_next_points - prev));
+    pct = Math.max(4, Math.min(100, pct));
+  }
+  const filled = Math.max(1, Math.min(total, a.bond_level));
+  let hearts = "";
+  for (let i = 0; i < total; i++) hearts += `<span class="${i < filled ? "fill" : "empty"}">♥</span>`;
+  return { html: `<span class="hearts">${hearts}</span>`, pct };
+}
+
+/* ================= 渲染入口 ================= */
+const YARD_WATER_LABEL = { puddles: "水洼", flooded: "内涝" };
+
+function renderDrainButton(d) {
+  const level = d.environment && d.environment.yard_water;
+  qs("#btn-drain").style.display = (level && level !== "none") ? "flex" : "none";
+}
+
+function render() {
+  const d = state.data;
+  if (!d) return;
+  document.title = "迷你小院子";
+  renderHero(d);
+  renderSceneView(d);
+  renderDrainButton(d);
+  tickClock();
+}
+
+const DAYPARTS = [
+  [5, 8, "清晨", "EARLY MORNING"], [8, 11, "上午", "LATE MORNING"],
+  [11, 13, "正午", "MIDDAY"], [13, 17, "下午", "AFTERNOON"],
+  [17, 19, "黄昏", "DUSK"], [19, 23, "夜晚", "NIGHT"],
+];
+const DAYPART_LATE = ["深夜", "LATE NIGHT"];
+
+function renderHero(d) {
+  const w = d.weather;
+  const tags = (w && w.tags) || [];
+  state.raining = tags.some(t => /rain|drizzle|shower|storm/.test(t)) || /雨/.test((w && w.condition_text) || "");
+  const night = skyClass() === "night";
+  qs("#wx-slot").innerHTML = weatherIconHtml(w && w.condition_text, night);
+  const seasonName = { spring: "春天", summer: "夏天", autumn: "秋天", winter: "冬天" }[d.season] || "";
+  const t = new Date(new Date(d.server_now).getTime() + state.clockDrift + (Date.now() - state.clockBase));
+  const dateStr = t.toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" });
+  const wxStr = w ? `${w.condition_text || ""}${w.temp_c != null ? " " + Math.round(w.temp_c) + "°" : ""}` : "天气未知";
+  qs("#hero-line").textContent = `${dateStr} · ${seasonName} · ${wxStr}`;
+}
+
+function updateClockFace() {
+  if (!state.data) return;
+  const t = new Date(new Date(state.data.server_now).getTime() + state.clockDrift + (Date.now() - state.clockBase));
+  const h = t.getHours();
+  const dp = DAYPARTS.find(([a, b]) => h >= a && h < b) || null;
+  const [cn, en] = dp ? [dp[2], dp[3]] : DAYPART_LATE;
+  qs("#hero-period").innerHTML = `<span class="cn">${cn}</span>${en}`;
+  const h12 = ((h + 11) % 12) + 1;
+  const mm = String(t.getMinutes()).padStart(2, "0");
+  qs("#hero-time").innerHTML = `${h12}:${mm}<span class="ampm">${h < 12 ? "am" : "pm"}</span>`;
+}
+
+/* ================= 弹层：光景信笺 ================= */
+function openLetterPopup() {
+  const d = state.data;
+  const t = d.scene && d.scene.generated_at ? new Date(d.scene.generated_at) : null;
+  const when = t ? "\n\n记下于 " + t.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  const text = (d.scene && d.scene.text) ? d.scene.text + when : "院子里静悄悄的。去逛逛，回来就有了。";
+  openSheet("院子里最近的光景", text, [
+    { label: "去逛逛", cls: "warm", onClick: () => doAction("逛逛", "放下手里的东西，去院子里走一圈…") },
+  ], null, { letter: true });
+}
+qs("#btn-letter").onclick = openLetterPopup;
+qs("#btn-stroll2").onclick = () => doAction("逛逛", "放下手里的东西，去院子里走一圈…");
+
+/* ================= 弹层：手账 ================= */
+function openJournalPopup() {
+  const j = state.data && state.data.journal;
+  if (!j) { openSheet("院子手账", "手账还没翻开。", []); return; }
+  const pick = (arr, render, empty) => (arr && arr.length) ? arr.slice(-8).map(render).join("、") : empty;
+  const html = `
+    <div class="inv-section"><b>已发现物种</b>${pick(j.species_seen, r => r.species || "小访客", "还没有遇见新的小动物")}</div>
+    <div class="inv-section"><b>作物收获</b>${pick(j.crops_harvested, r => cropName(r.crop_id) + (r.quality === "poor" ? "（品相欠佳）" : ""), "还没有收获记录")}</div>
+    <div class="inv-section"><b>做过的点心</b>${pick(j.meals_made, r => recipeName(r.recipe_id), "还没有做过点心")}</div>
+    <div class="inv-section"><b>送给user的礼物</b>${pick(j.gifts_given, r => r.display_name || "一份小礼物", "还没有送出院子礼物")}</div>
+    <div class="inv-section"><b>亲密里程碑</b>${pick(j.bond_milestones, r => `${r.animal_name || "小访客"} · ${r.level_name || ""}`, "还没有亲密里程碑")}</div>
+    <div class="inv-section"><b>日历时刻</b>${pick(j.calendar_moments, r => r.name || "一个季节时刻", "还没有记下日历时刻")}</div>
+    <div class="inv-section"><b>作物事故</b>${pick(j.crop_incidents, r => r.condition_name || "一次小事故", "还没有作物事故")}</div>
+    <div class="inv-section"><b>排水记录</b>${pick(j.drainage, r => {
+      const at = r.at ? new Date(r.at).toLocaleString("zh-CN", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
+      const label = YARD_WATER_LABEL[r.yard_water] || r.yard_water || "";
+      return `${at} · ${label}/连雨${r.rain_streak_days || 0}天`;
+    }, "还没有排过水")}</div>`;
+  openSheet("院子手账", "", [], html);
+}
+qs("#btn-journal").onclick = openJournalPopup;
+
+/* ================= 弹层：礼物盒 ================= */
+function openGiftBoxPopup() {
+  const j = state.data && state.data.journal;
+  const gifts = j && j.gifts_given;
+  if (!gifts || !gifts.length) {
+    openSheet("礼物盒", "还没有送出过院子礼物。", []);
+    return;
+  }
+  const rows = gifts.slice().reverse().map(g => {
+    const name = g.display_name || "一份小礼物";
+    const at = g.at ? new Date(g.at).toLocaleString("zh-CN", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
+    const note = g.note ? `<div class="gift-note">「${g.note}」</div>` : "";
+    return `<div class="gift-row"><span class="gift-name">${name}</span>${at ? `<span class="gift-time">${at}</span>` : ""}${note}</div>`;
+  }).join("");
+  const html = `<div class="gift-list">${rows}</div>`;
+  openSheet("礼物盒", "送给user的院子心意。", [], html);
+}
+qs("#btn-giftbox").onclick = openGiftBoxPopup;
+
+/* ================= 弹层：篮子 ================= */
+function openBasketPopup() {
+  const inv = (state.data && state.data.inventory) || {};
+  const seeds = Object.entries(inv.seeds || {}).filter(([, n]) => n > 0);
+  const produce = Object.entries(inv.produce || {}).filter(([, n]) => n > 0);
+  const producePoor = Object.entries(inv.produce_poor || {}).filter(([, n]) => n > 0);
+  const food = Object.entries(inv.prepared_food || {}).filter(([, n]) => n > 0);
+  const animalProducts = Object.entries(inv.animal_products || {}).filter(([, n]) => n > 0);
+  let html = `<div class="inv-section"><b>种子</b>`;
+  html += seeds.length ? seeds.map(([id, n]) =>
+    `<div class="item-row"><span>${CROP_EMOJI[id] || "🌰"}</span><span class="grow">${cropName(id)}</span><span class="count">×${n}</span><button class="btn small ghosty" data-sow="${id}">播种</button></div>`
+  ).join("") : `<div class="empty-hint">空空的</div>`;
+  html += `</div><div class="inv-section"><b>收获</b>`;
+  // 欠佳条目跟在同名正常条目后，带"蔫"字小标；produce_poor 为空时这段
+  // 什么都不追加，界面零痕迹（设计稿第六节5）。
+  html += (produce.length || producePoor.length) ? (
+    produce.map(([id, n]) =>
+      `<div class="item-row"><span>${CROP_EMOJI[id] || "🥗"}</span><span class="grow">${cropName(id)}</span><span class="count">×${n}</span><button class="btn small ghosty" data-gift="${id}" data-kind="produce">送给user</button></div>`
+    ).join("") +
+    producePoor.map(([id, n]) =>
+      `<div class="item-row"><span>${CROP_EMOJI[id] || "🥗"}</span><span class="grow">${cropName(id)}<span class="quality-tag">蔫</span></span><span class="count">×${n}</span><button class="btn small ghosty" data-gift="${id}" data-kind="produce">送给user</button></div>`
+    ).join("")
+  ) : `<div class="empty-hint">还没有收获</div>`;
+  html += `</div><div class="inv-section"><b>做好的点心</b>`;
+  html += food.length ? food.map(([id, n]) =>
+    `<div class="item-row"><span>·</span><span class="grow">${recipeName(id)}</span><span class="count">×${n}</span><button class="btn small ghosty" data-gift="${id}" data-kind="food">送给user</button></div>`
+  ).join("") : `<div class="empty-hint">还没有做过点心</div>`;
+  html += `</div><div class="inv-section"><b>动物带来的东西</b>`;
+  html += animalProducts.length ? animalProducts.map(([id, n]) =>
+    `<div class="item-row"><span>${id === "egg" ? "🥚" : id === "hatchable_egg" ? "🌟🥚" : "🎁"}</span><span class="grow">${id === "egg" ? "鸡蛋" : id === "hatchable_egg" ? "可孵化鸡蛋" : id}</span><span class="count">×${n}</span></div>`
+  ).join("") : `<div class="empty-hint">还没有</div>`;
+  html += `</div>`;
+  const actions = [];
+  if (produce.length) actions.push({ label: "做点吃的", cls: "warm", onClick: openCookSheet });
+  const coop = state.data && state.data.coop;
+  if (coop && coop.story_status === "awaiting_choice") {
+    actions.push({ label: "亲自孵化三枚蛋", cls: "warm", onClick: () => doAction("鸡蛋 孵化", "先搭好鸡舍，再把三枚蛋拢进软窝…") });
+    actions.push({ label: "吃掉三枚鸡蛋", onClick: () => doAction("鸡蛋 吃掉", "把三枚鸡蛋拿去吃掉…") });
+  }
+  openSheet("门廊小桌上的篮子", "收获、种子和动物带来的东西都收在这里。", actions, html);
+  const extra = qs("#sheet-extra");
+  extra.querySelectorAll("[data-sow]").forEach(b => b.onclick = () => openSowPickPlot(b.dataset.sow));
+  extra.querySelectorAll("[data-gift]").forEach(b => b.onclick = () =>
+    doAction(`送给user ${b.dataset.kind === "food" ? recipeName(b.dataset.gift) : cropName(b.dataset.gift)}`, "包好一份来自院子的小礼物…"));
+}
+
+function openCoopSheet() {
+  const c = state.data && state.data.coop;
+  if (!c || !c.built) {
+    const awaiting = c && c.story_status === "awaiting_choice";
+    const eaten = c && c.story_status === "eaten";
+    openSheet(
+      "鸡舍",
+      awaiting
+        ? `${c.source_animal_name || "一只小动物"}送来了三枚鸡蛋。选择孵化时才会搭起鸡舍。`
+        : eaten ? "三枚鸡蛋已经吃掉了，因此没有搭鸡舍。" : "院子里还没有鸡舍；要等小动物先送来鸡蛋。",
+      awaiting ? [
+        { label: "亲自孵化", cls: "warm", onClick: () => doAction("鸡蛋 孵化", "先搭好鸡舍，再把三枚蛋拢进软窝…") },
+        { label: "吃掉三枚鸡蛋", onClick: () => doAction("鸡蛋 吃掉", "把三枚鸡蛋拿去吃掉…") },
+      ] : [],
+    );
+    return;
+  }
+  let desc = "鸡舍已经搭好了。";
+  const actions = [];
+  if (c.story_status === "incubating") {
+    desc = `正在亲自孵鸡蛋×${c.incubating_egg_count || 0}，约剩 ${fmtLeft(c.remaining_seconds)}；成鸡母×${c.hen_count || 0}、公×${c.rooster_count || 0}。`;
+  }
+  else if (c.story_status === "hatched" && c.chick_count) {
+    const youngHens = (c.chicks || []).filter(x => x.sex === "hen").length;
+    const youngRoosters = (c.chicks || []).length - youngHens;
+    desc = `小母鸡×${youngHens}、小公鸡×${youngRoosters}正在软窝里长大，约剩 ${fmtLeft(c.next_maturity_seconds)}；成鸡母×${c.hen_count || 0}、公×${c.rooster_count || 0}。`;
+  } else if (c.story_status === "hatched") {
+    desc = `母鸡×${c.hen_count || 0}、公鸡×${c.rooster_count || 0}住在这里；累计下蛋×${c.total_eggs_laid || 0}，篮子鸡蛋×${c.egg_count || 0}、可孵化鸡蛋×${c.hatchable_egg_count || 0}。`;
+  }
+  else if (c.story_status === "eaten") desc = "三枚鸡蛋已经吃掉了，软窝现在空着。";
+  if (c.story_status === "hatched" && (c.hatchable_egg_count || 0) > 0) {
+    actions.push({ label: "孵一枚可孵化鸡蛋", cls: "warm", onClick: () => doAction("可孵化鸡蛋 孵化", "把一枚稀有蛋拢进软窝…") });
+  }
+  openSheet("鸡舍", desc, actions);
+  const extra = qs("#sheet-extra");
+  (c.chicks || []).forEach(chick => {
+    const row = document.createElement("button");
+    row.className = "item-row chicken-row";
+    row.type = "button";
+    const icon = document.createElement("span");
+    icon.textContent = chick.stage === "chick" ? "🐥" : chick.sex === "hen" ? "🐔" : "🐓";
+    const label = document.createElement("span");
+    label.className = "grow";
+    label.textContent = chickenName(chick);
+    const meta = document.createElement("span");
+    meta.className = "count";
+    meta.textContent = `${chickenKind(chick)} · ${chick.personality || "还看不出性格"}`;
+    row.append(icon, label, meta);
+    row.onclick = () => openChickenSheet(chick);
+    extra.appendChild(row);
+  });
+}
+
+function chickenKind(chick) {
+  if (chick.stage === "adult") return chick.sex === "hen" ? "母鸡" : "公鸡";
+  return chick.sex === "hen" ? "小母鸡" : "小公鸡";
+}
+
+function chickenName(chick) {
+  return chick.nickname || `${chickenKind(chick)}[${String(chick.id || "").slice(0, 4)}]`;
+}
+
+function openChickenSheet(chick) {
+  const name = chickenName(chick);
+  const appearance = chick.stage === "adult" ? chick.adult_appearance : chick.chick_appearance;
+  const desc = `${chickenKind(chick)} · 性格：${chick.personality || "还看不出来"} · ${appearance || "还没有留下外貌记录"} · 编号 ${String(chick.id || "").slice(0, 8)} · 喂食×${chick.feed_count || 0} · 摸摸×${chick.pet_count || 0}`;
+  openSheet(name, desc, [
+    { label: "喂一点基础饲料", cls: "warm", onClick: () => doAction(`喂鸡 ${chick.id}`, `给${name}添一点饲料…`) },
+    { label: "轻轻摸摸", onClick: () => doAction(`摸摸鸡 ${chick.id}`, `轻轻摸摸${name}…`) },
+    { label: "取名字", onClick: () => {
+      const nickname = window.prompt("给它取什么名字？（最多12个字）", chick.nickname || "");
+      if (nickname && nickname.trim()) doAction(`鸡取名 ${chick.id} ${nickname.trim()}`, "认真记下这个名字…");
+    } },
+  ]);
+}
+
+/* ================= 播种 / 烹饪 / 投喂 ================= */
+function openSowSheet(plotNo) {
+  // 8/9 事故：地块瓦片的本地缓存可能落后于真实院子状态（切到后台时定时
+  // 刷新会被浏览器暂停），点开播种前用当前缓存里这块地的最新状态兜底
+  // 拦一次，跟 openSowPickPlot 的"没有空地"提示保持同一套 err 弹窗风格。
+  const cachedPlots = (state.data && state.data.plots) || [];
+  const cachedPlot = cachedPlots.find(p => p.plot_id === `p${plotNo}`);
+  if (cachedPlot && !(cachedPlot.status === "empty" || !cachedPlot.crop_id)) {
+    showModal("这块菜畦已经种上东西啦，挑一块空菜畦再来吧。", "err");
+    return;
+  }
+  const inv = (state.data && state.data.inventory) || {};
+  const seeds = inv.seeds || {};
+  const ids = Object.keys(seeds).filter(k => seeds[k] > 0);
+  if (!ids.length) {
+    openSheet("播种", "篮子里没有种子啦，等收获时会留种，或者季节更替时会补一点应季种子。", []);
+    return;
+  }
+  const chips = `<div class="option-grid">` + ids.map(id =>
+    `<div class="option-chip" data-crop="${id}"><span class="big">${CROP_EMOJI[id] || "🌰"}</span>${cropName(id)} ×${seeds[id]}</div>`
+  ).join("") + `</div>`;
+  openSheet(`给${plotNo}号菜畦播种`, "挑一颗种子，剩下的交给阳光和时间。", [], chips);
+  qs("#sheet-extra").querySelectorAll(".option-chip").forEach(chip => {
+    // 8/10 凌晨事故：这里以前直接发 chip.dataset.crop（内部 crop_id，
+    // 如 chinese_cabbage/sweet_potato 带下划线），被 server.py 的
+    // _ARG_SAFE 正则拒收——正则本身也已经补了下划线，但两边都改成发
+    // 中文名更安全（与 openSowPickPlot 的篮子播种路径同口径）。
+    chip.onclick = () => doAction(`播种 ${cropName(chip.dataset.crop)} ${plotNo}`, "把种子轻轻埋进土里…");
+  });
+}
+
+function openSowPickPlot(cropId) {
+  const empty = state.data.plots.filter(p => p.status === "empty" || !p.crop_id);
+  if (!empty.length) { showModal("四块菜畦都种着东西啦，等收获之后才腾得出位置。", "err"); return; }
+  const chips = `<div class="option-grid">` + empty.map(p =>
+    `<div class="option-chip" data-plot="${p.plot_id.replace(/^p/, "")}"><span class="big">${p.label}</span>${p.label}菜畦</div>`
+  ).join("") + `</div>`;
+  openSheet(`把${cropName(cropId)}种在哪？`, "选一块空菜畦。", [], chips);
+  qs("#sheet-extra").querySelectorAll(".option-chip").forEach(chip => {
+    chip.onclick = () => doAction(`播种 ${cropName(cropId)} ${chip.dataset.plot}`, "把种子轻轻埋进土里…");
+  });
+}
+
+function openCookSheet() {
+  // 第七版阶段D：可做性不再由前端重算——直接读 server.py 用
+  // garden._recipe_ingredients_available 算好、随 /api/state 一起发下来的
+  // r.makeable（已合计 produce + produce_poor），跟 CLI「够做什么」共用
+  // 同一份后端实现，两边天然同口径。
+  const recipes = Object.entries(state.data.recipes || {});
+  const chips = `<div class="option-grid">` + recipes.map(([id, r]) => {
+    const preparedIngredients = r.prepared_ingredients || {};
+    const parts = Object.entries(r.ingredients).map(([c, n]) => `${cropName(c)}×${n}`);
+    parts.push(...Object.entries(preparedIngredients).map(([p, n]) => `${recipeName(p)}×${n}`));
+    if (r.egg_range) parts.push(`鸡蛋×${r.egg_range[0]}～${r.egg_range[1]}`);
+    const ings = parts.join("＋");
+    const ok = !!r.makeable;
+    return `<div class="option-chip" data-recipe="${id}" data-ok="${ok ? 1 : 0}" style="${ok ? "" : "opacity:.4"}">${r.name}<div class="ings">${ings}</div></div>`;
+  }).join("") + `</div>`;
+  openSheet("做点吃的", "用篮子里的收获得一份小点心。", [], chips);
+  qs("#sheet-extra").querySelectorAll(".option-chip").forEach(chip => {
+    chip.onclick = () => {
+      if (chip.dataset.ok !== "1") { showModal("材料还不够呢，先去收获一些吧。", "err"); return; }
+      const recipe = state.data.recipes[chip.dataset.recipe];
+      if (recipe.egg_range) { openEggCountSheet(chip.dataset.recipe); return; }
+      doAction(`做点吃的 ${recipeName(chip.dataset.recipe)}`, "厨房里飘出香味…");
+    };
+  });
+}
+
+function openEggCountSheet(recipeId) {
+  const recipe = state.data.recipes[recipeId];
+  const available = (((state.data.inventory || {}).animal_products || {}).egg) || 0;
+  const minimum = recipe.egg_range[0];
+  const maximum = Math.min(recipe.egg_range[1], available);
+  const chips = `<div class="option-grid">` + Array.from(
+    { length: Math.max(0, maximum - minimum + 1) }, (_, i) => minimum + i,
+  ).map(n => `<div class="option-chip" data-eggs="${n}"><span class="big">🥚</span>放${n}个蛋</div>`).join("") + `</div>`;
+  openSheet(recipe.name, `篮子里有鸡蛋×${available}，自己决定这份放几个。`, [], chips);
+  qs("#sheet-extra").querySelectorAll(".option-chip").forEach(chip => {
+    chip.onclick = () => doAction(
+      `做点吃的 ${recipe.name} ${chip.dataset.eggs}个蛋`,
+      `打进${chip.dataset.eggs}个鸡蛋…`,
+    );
+  });
+}
+
+function openFeedSheet(a, canFeed, produce) {
+  const chips = `<div class="option-grid">` + canFeed.map(id =>
+    `<div class="option-chip" data-crop="${id}"><span class="big">${CROP_EMOJI[id] || "🥗"}</span>${cropName(id)} ×${produce[id]}</div>`
+  ).join("") + `</div>`;
+  openSheet(`投喂${a.name}`, `${a.species}可以吃这些，只给一小份哦。`, [], chips);
+  qs("#sheet-extra").querySelectorAll(".option-chip").forEach(chip => {
+    chip.onclick = () => doAction(`投喂 ${a.id} ${cropName(chip.dataset.crop)}`, `递上一小份${cropName(chip.dataset.crop)}…`);
+  });
+}
+
+/* ================= 弹层：菜畦详情 ================= */
+function openPlotSheet(p, n) {
+  const cond = p.condition && p.condition.status === "active" ? p.condition : null;
+  const isReady = p.status === "ready";
+  const sprite = p.status === "withered" ? null : cropSprite(p);
+  let midHtml;
+  if (p.status === "withered") {
+    midHtml = `<div class="sp-mid"><div class="soil-ellipse"></div><span class="crop-img" style="font-size:2rem">🥀</span></div>`;
+  } else if (sprite) {
+    const hPx = { seed: 34, sprout: 44, growing: 62, ready: 72 }[p.stage] || 58;
+    midHtml = `<div class="sp-mid"><div class="soil-ellipse"></div><img class="crop-img${isReady ? " ready" : ""}" style="height:${hPx}px" src="assets/sprites/${sprite}.png" alt="${p.crop_name || ""}"></div>`;
+  } else {
+    midHtml = `<div class="sp-mid"><div class="soil-ellipse"></div><span class="crop-img" style="font-size:2.2rem">${CROP_EMOJI[p.crop_id] || "🌱"}</span></div>`;
+  }
+  let rows = `<div class="sp-row"><b>${p.label}菜畦 · ${p.crop_name}</b>${p.quality === "poor" ? '<span class="quality-tag">蔫</span>' : ""} · ${p.stage_label || ""}</div>`;
+  if (cond) rows += `<div class="sp-row">生长暂停，需要先「${cond.action}」</div>`;
+  if (p.moisture != null) rows += `<div class="sp-row">土壤${p.moisture_label}（${p.moisture}）· ${p.advice}</div><div class="moisture"><i style="width:${Math.min(100, p.moisture)}%"></i></div>`;
+  if (p.ready_in_seconds != null && p.status === "growing") rows += `<div class="sp-row">约 ${fmtLeft(p.ready_in_seconds)} 后成熟 · 基础成熟期 ${p.base_days} 天</div>`;
+  if (p.growth_note) rows += `<div class="sp-row">${p.growth_note}</div>`;
+
+  const actions = [];
+  if (p.status === "withered") {
+    actions.push({ label: "清理这块菜畦", cls: "warm", onClick: () => doAction(`清理 ${n}`, "正在清理枯掉的枝叶…") });
+  } else if (isReady) {
+    actions.push({ label: `收获${p.crop_name}`, cls: "warm", onClick: () => doAction(`收获 ${n}`, "摘果子啦…") });
+  } else if (cond) {
+    actions.push({ label: `${cond.action}（处理${cond.name}）`, cls: "warm", onClick: () => doAction(`${cond.action} ${n}`, `正在${cond.action}…`) });
+  } else {
+    const canWater = !(p.advice === "不要再浇" || p.advice === "明确不应浇");
+    actions.push({
+      label: canWater ? "浇水" : `${p.advice || "现在不用浇"}`,
+      disabled: !canWater,
+      onClick: () => doAction(`浇水 ${n}`, "哗啦啦浇水…"),
+    });
+  }
+  openSheet(p.crop_name, "", actions, `<div class="sheet-plot">${midHtml}${rows}</div>`);
+}
+
+/* ================= 弹层：动物详情 ================= */
+function openAnimalSheet(a) {
+  let actions = [];
+  let extra = "";
+  if (a.awayNow) {
+    openSheet(a.name, "它出去转转了，要等它回来才能一起玩。", []);
+    return;
+  }
+  if (a.kind === "animal") {
+    actions.push({ label: "摸摸", onClick: () => doAction(`摸摸 ${a.id}`, `轻轻摸摸${a.name}…`) });
+    const produce = ((state.data.inventory || {}).produce) || {};
+    const allowed = FEEDABLE[a.category] || [];
+    const canFeed = allowed.filter(id => produce[id] > 0);
+    if (canFeed.length) {
+      actions.push({ label: "投喂一点点心", onClick: () => openFeedSheet(a, canFeed, produce) });
+    } else {
+      actions.push({ label: allowed.length === 0 ? "猫和刺猬不吃菜畦点心哦" : "篮子里没有合它口味的点心", disabled: true });
+    }
+    const canPlay = a.bond_level >= 2;
+    actions.push({
+      label: canPlay ? "陪玩一会儿" : "陪玩（等它更信任你一点）",
+      disabled: !canPlay,
+      onClick: () => doAction(`陪玩 ${a.id}`, `和${a.name}玩一会儿…`),
+    });
+  } else {
+    actions.push({ label: "浇浇水", onClick: () => doAction(`浇水 ${a.id}`, "给花草浇水…") });
+  }
+  const hearts = heartsHtml(a);
+  extra = `<div class="sheet-animal">
+      <div class="a-pic">${animalAvatarHtml(a)}</div>
+      <div class="animal-body">
+        <div class="animal-name">${a.name}${a.residency === "resident" ? '<span class="resident">常客</span>' : ""}</div>
+        <div class="animal-meta">
+          <span class="tag">${a.spot || "院子里"}</span>
+          ${a.personality ? `<span class="tag">${a.personality}</span>` : ""}
+          ${a.trait ? `<span class="tag">${a.trait}</span>` : ""}
+        </div>
+        <div class="bond">${hearts.html}<div class="bond-bar"><i style="width:${hearts.pct}%"></i></div><span>亲密 ${a.bond_points} · ${a.bond_level_name}</span></div>
+      </div>
+    </div>
+    ${a.last_note ? `<div class="note">“${a.last_note}”</div>` : ""}`;
+  openSheet(a.name, [a.species, `常待在${a.spot || "院子里"}`].filter(Boolean).join(" · "), actions, extra);
+}
+
+/* ================= 院子全景 ================= */
+// 坐标单位：背景图宽/高的百分比，全部以“贴纸底边中点”为落脚点
+// 视野里每块大田按 2×2 计能摆 4 株（远期 16 格）；目前 4 块地
+// 全部收编进上方那块大田的四个角位，其余田保持空地皮。
+const SCENE_PLOT_POS = {
+  p1: { x: 43.0, y: 42.7, s: 0.85 },  // 一号大田 · 上角（里排）
+  p2: { x: 55.0, y: 49.8, s: 0.85 },  // 一号大田 · 右角（里排）
+  p3: { x: 38.6, y: 49.6, s: 1.0 },   // 一号大田 · 左角（外排）
+  p4: { x: 46.3, y: 54.6, s: 1.0 },   // 一号大田 · 下角（外排）
+};
+const SCENE_SPOT_POS = {
+  "院门与信箱旁": [{ x: 30, y: 37 }, { x: 39, y: 34 }, { x: 34, y: 41 }, { x: 44, y: 31 }],
+  "屋檐下与墙根": [{ x: 54, y: 35 }, { x: 63, y: 37 }, { x: 58, y: 31 }, { x: 67, y: 34 }],
+  "门廊小桌": [{ x: 86, y: 44 }, { x: 79, y: 46 }, { x: 83, y: 40 }, { x: 90, y: 48 }],
+};
+const SCENE_FREE_POS = [{ x: 12, y: 50 }, { x: 88, y: 58 }];
+// 同一地点/自由位真实动物数超过预设格位时，不能让多出来的原样叠在
+// 最后一格正上方（8/4 真实事故：栗子把团团完全挡住）；超出部分按次序
+// 错开一点，宁可略挤也不要完全重合、点不到底下那只。
+function spotSlot(list, usedSoFar) {
+  const idx = Math.min(usedSoFar, list.length - 1);
+  const overflow = Math.max(0, usedSoFar - (list.length - 1));
+  const base = list[idx];
+  return overflow ? { x: base.x + overflow * 3.2, y: base.y + overflow * 2.4 } : base;
+}
+// 实物热点：门廊篮子 → 篮子弹层；信箱 → 手账弹层
+const SCENE_PROP_ZONES = [
+  { name: "basket", x: 86, y: 43, w: 17, h: 17, open: () => openBasketPopup() },
+  { name: "mailbox", x: 31, y: 24, w: 14, h: 9, open: () => openJournalPopup() },
+];
+
+function sceneSpriteEl(src, x, y, wPct, title, onClick) {
+  const img = document.createElement("img");
+  img.className = "scene-sprite";
+  img.src = src;
+  img.alt = title || "";
+  img.title = title || "";
+  img.draggable = false;
+  img.style.left = x + "%";
+  img.style.top = y + "%";
+  img.style.width = wPct + "%";
+  img.style.zIndex = Math.round(y * 10);
+  if (onClick) img.onclick = (e) => { e.stopPropagation(); onClick(); };
+  return img;
+}
+
+function renderSceneView(d) {
+  const scene = qs("#scene");
+  scene.querySelectorAll(".scene-sprite,.scene-badge,.scene-plotzone,.scene-prop").forEach(el => el.remove());
+  const cls = skyClass();
+  scene.className = "tint-" + cls;
+
+  const raining = state.raining;
+  scene.classList.toggle("raining", raining);
+  const layer = qs("#scene-rain");
+  if (raining && !layer.childElementCount) {
+    for (let i = 0; i < 40; i++) {
+      const drop = document.createElement("i");
+      drop.className = "drop";
+      drop.style.left = Math.random() * 100 + "%";
+      drop.style.animationDuration = (0.6 + Math.random() * 0.8) + "s";
+      drop.style.animationDelay = (Math.random() * 1.2) + "s";
+      layer.appendChild(drop);
+    }
+  }
+
+  // 实物热点（篮子 / 信箱）
+  for (const z of SCENE_PROP_ZONES) {
+    const el = document.createElement("div");
+    el.className = "scene-prop";
+    el.style.left = z.x + "%";
+    el.style.top = z.y + "%";
+    el.style.width = z.w + "%";
+    el.style.height = z.h + "%";
+    el.style.zIndex = Math.round(z.y * 10) + 1;
+    el.onclick = (e) => { e.stopPropagation(); z.open(); };
+    scene.appendChild(el);
+  }
+
+  d.plots.forEach((p) => {
+    const pos = SCENE_PLOT_POS[p.plot_id];
+    if (!pos) return;
+    const n = p.plot_id.replace(/^p/, "");
+    const zone = document.createElement("div");
+    zone.className = "scene-plotzone";
+    zone.style.left = pos.x + "%";
+    zone.style.top = (pos.y - 2.5) + "%";
+    zone.style.width = "10%";
+    zone.style.height = "7%";
+    zone.style.zIndex = Math.round((pos.y - 3) * 10);
+    zone.onclick = () => (p.status === "empty" || !p.crop_id) ? openSowSheet(n) : openPlotSheet(p, n);
+    scene.appendChild(zone);
+
+    if (p.status === "empty" || !p.crop_id) return;
+    if (p.status === "withered") {
+      const dead = document.createElement("div");
+      dead.className = "scene-sprite";
+      dead.style.cssText = `left:${pos.x}%;top:${pos.y}%;font-size:1.6rem;z-index:${Math.round(pos.y * 10)};filter:grayscale(1)`;
+      dead.textContent = "🥀";
+      dead.onclick = () => openPlotSheet(p, n);
+      scene.appendChild(dead);
+      return;
+    }
+    const spriteName = cropSprite(p);
+    if (spriteName) {
+      const wPct = ({ seed: 4.5, sprout: 5.5, growing: 7.5, ready: 9 }[p.stage] || 7) * (pos.s || 1);
+      scene.appendChild(sceneSpriteEl(
+        `assets/sprites/${spriteName}.png`, pos.x, pos.y + 2, wPct,
+        `${p.crop_name || ""}（${p.stage_label || ""}）`,
+        () => openPlotSheet(p, n),
+      ));
+    } else {
+      // 还没有专属画好的生长阶段图（如西瓜/辣椒），不能什么都不画——
+      // 不然院子主视图里这块地看起来是空的，只能盲点。用emoji兜底。
+      const fontRem = ({ seed: 1.1, sprout: 1.3, growing: 1.6, ready: 1.85 }[p.stage] || 1.5) * (pos.s || 1);
+      const chip = document.createElement("div");
+      chip.className = "scene-sprite";
+      chip.style.cssText = `left:${pos.x}%;top:${pos.y + 2}%;font-size:${fontRem}rem;z-index:${Math.round((pos.y + 2) * 10)}`;
+      chip.textContent = CROP_EMOJI[p.crop_id] || "🌱";
+      chip.title = `${p.crop_name || ""}（${p.stage_label || ""}）`;
+      chip.onclick = (e) => { e.stopPropagation(); openPlotSheet(p, n); };
+      scene.appendChild(chip);
+    }
+    const cond = p.condition && p.condition.status === "active" ? p.condition : null;
+    let badge = null;
+    if (cond) { badge = document.createElement("span"); badge.className = "scene-badge cond"; badge.textContent = cond.name; }
+    else if (p.status === "ready") { badge = document.createElement("span"); badge.className = "scene-badge ready"; badge.textContent = "可收获"; }
+    if (badge) {
+      badge.style.left = pos.x + "%";
+      badge.style.top = (pos.y - 7) + "%";
+      scene.appendChild(badge);
+    }
+  });
+
+  const isNight = cls === "night";
+  const spotUsed = {};
+  d.animals.forEach((a) => {
+    if (a.kind !== "animal") return;
+    const spot = a.spot && SCENE_SPOT_POS[a.spot] ? a.spot : null;
+    let pos;
+    if (spot) {
+      pos = spotSlot(SCENE_SPOT_POS[spot], spotUsed[spot] || 0);
+      spotUsed[spot] = (spotUsed[spot] || 0) + 1;
+    } else {
+      pos = spotSlot(SCENE_FREE_POS, spotUsed["__free__"] || 0);
+      spotUsed["__free__"] = (spotUsed["__free__"] || 0) + 1;
+    }
+    const base = SPECIES_SPRITE[a.species];
+    if (base) {
+      const pose = isNight ? "loaf" : "sit";
+      const wPct = base.startsWith("rabbit") ? (isNight ? 9 : 9.5) : (isNight ? 13 : 11);
+      scene.appendChild(sceneSpriteEl(
+        `assets/sprites/${base}-${pose}.png`, pos.x, pos.y, wPct,
+        a.name, () => openAnimalSheet(a),
+      ));
+    } else {
+      const chip = document.createElement("div");
+      chip.className = "scene-sprite";
+      chip.style.cssText = `left:${pos.x}%;top:${pos.y}%;font-size:1.7rem;z-index:${Math.round(pos.y * 10)}`;
+      chip.textContent = animalEmoji(a);
+      chip.onclick = () => openAnimalSheet(a);
+      scene.appendChild(chip);
+    }
+  });
+
+  if (d.coop && d.coop.built) {
+    const coop = document.createElement("div");
+    coop.className = "scene-sprite";
+    coop.style.cssText = "left:72%;top:37%;font-size:2.5rem;z-index:380";
+    coop.textContent = "🛖";
+    coop.title = "鸡舍";
+    coop.onclick = (e) => { e.stopPropagation(); openCoopSheet(); };
+    scene.appendChild(coop);
+    const chickenPos = [[68, 45], [74, 47], [79, 43], [71, 51], [77, 52], [83, 48]];
+    (d.coop.chicks || []).forEach((chick, index) => {
+      const pos = chickenPos[index % chickenPos.length];
+      const chip = document.createElement("div");
+      chip.className = "scene-sprite";
+      chip.style.cssText = `left:${pos[0] + Math.floor(index / chickenPos.length) * 1.2}%;top:${pos[1]}%;font-size:${chick.stage === "chick" ? 1.35 : 1.65}rem;z-index:${400 + index}`;
+      chip.textContent = chick.stage === "chick" ? "🐥" : chick.sex === "hen" ? "🐔" : "🐓";
+      chip.title = chickenName(chick);
+      chip.onclick = (e) => { e.stopPropagation(); openChickenSheet(chick); };
+      scene.appendChild(chip);
+    });
+  }
+}
+
+/* ================= 道具栏 ================= */
+qs("#btn-water-all").onclick = () => {
+  openSheet("浇水", "一次浇完所有生长中的菜畦。", [
+    { label: "浇全部", cls: "warm", onClick: () => doAction("浇水 全部", "哗啦啦浇遍小院…") },
+  ]);
+};
+qs("#btn-drain").onclick = () => {
+  const level = state.data && state.data.environment && state.data.environment.yard_water;
+  const label = YARD_WATER_LABEL[level] || "积水";
+  openSheet("排水", `院子里现在是${label}，去疏通排水沟能让退水快一些。`, [
+    { label: "去排水", cls: "warm", onClick: () => doAction("排水", "蹲下身开始清理排水沟…") },
+  ]);
+};
+
+/* ================= 时钟与刷新 ================= */
+function tickClock() { updateClockFace(); }
+setInterval(tickClock, 1000);
+
+async function refresh(silent) {
+  if (state.refreshing) return;
+  state.refreshing = true;
+  try {
+    const d = await api("api/state");
+    state.clockBase = Date.now();
+    state.clockDrift = new Date(d.server_now).getTime() - Date.now();
+    state.data = { ...d, server_now: d.server_now };
+    render();
+    qs("#err-slot").innerHTML = "";
+  } catch (e) {
+    if (e.message !== "unauthorized") {
+      qs("#err-slot").innerHTML = `<div class="err-banner">刷新失败：${e.message}（过会儿再试）</div>`;
+    }
+    if (!silent) showModal("读取小院子失败：" + e.message, "err");
+  } finally {
+    state.refreshing = false;
+  }
+}
+
+refresh();
+setInterval(() => refresh(true), 60000);
+// 8/9 事故的一部分：手机切到后台时，浏览器会暂停 setInterval，回到前台
+// 那一刻本地缓存可能已经落后真实院子好几分钟（比如地块早被别的操作占
+// 满了）。页面重新可见时立即静默刷新一次，缩短这个窗口。
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") refresh(true);
+});
+</script>
+</body>
+</html>

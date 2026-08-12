@@ -1,0 +1,15 @@
+[Unit]
+Description=迷你小院子展示页
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/mini-yard/garden-web
+Environment=MINI_YARD_HOME=/path/to/mini-yard
+ExecStart=/path/to/mini-yard/venv/bin/python3 server.py
+Restart=on-failure
+RestartSec=5
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target
