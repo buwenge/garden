@@ -722,6 +722,11 @@ function openBasketPopup() {
     `<div class="item-row"><span>${id === "egg" ? "🥚" : id === "hatchable_egg" ? "🌟🥚" : "🎁"}</span><span class="grow">${id === "egg" ? "鸡蛋" : id === "hatchable_egg" ? "可孵化鸡蛋" : id}</span><span class="count">×${n}</span></div>`
   ).join("") : `<div class="empty-hint">还没有</div>`;
   html += `</div>`;
+  // 肥料只读展示，>0 才占版面，没有对应的操作按钮。
+  const fertilizerCount = (inv.fertilizer || {}).fertilizer || 0;
+  if (fertilizerCount > 0) {
+    html += `<div class="inv-section"><b>肥料</b><div class="item-row"><span>🌱</span><span class="grow">肥料</span><span class="count">×${fertilizerCount}</span></div></div>`;
+  }
   const actions = [];
   if (produce.length) actions.push({ label: "做点吃的", cls: "warm", onClick: openCookSheet });
   const coop = state.data && state.data.coop;
@@ -766,6 +771,15 @@ function openCoopSheet() {
     desc = `母鸡×${c.hen_count || 0}、公鸡×${c.rooster_count || 0}住在这里；累计下蛋×${c.total_eggs_laid || 0}，篮子鸡蛋×${c.egg_count || 0}、可孵化鸡蛋×${c.hatchable_egg_count || 0}。`;
   }
   else if (c.story_status === "eaten") desc = "三枚鸡蛋已经吃掉了，软窝现在空着。";
+  // 鸡粪/堆肥角只读展示，不加动作按钮（打扫鸡舍目前只走 home 指令）。
+  const manureUnits = c.manure_units || 0;
+  const manureCap = c.manure_cap || 0;
+  if (manureCap > 0) {
+    desc += ` 鸡粪×${manureUnits}/${manureCap}${manureUnits >= manureCap ? "（攒满了）" : ""}。`;
+  }
+  (c.compost_batches || []).forEach(batch => {
+    desc += ` 堆肥角：${batch.units}份发酵中，约剩 ${fmtLeft(batch.remaining_seconds)}。`;
+  });
   if (c.story_status === "hatched" && (c.hatchable_egg_count || 0) > 0) {
     actions.push({ label: "孵一枚可孵化鸡蛋", cls: "warm", onClick: () => doAction("可孵化鸡蛋 孵化", "把一枚稀有蛋拢进软窝…") });
   }

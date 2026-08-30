@@ -45,6 +45,10 @@ class GardenConditionStateMachineTests(unittest.TestCase):
         state.pop("entries")
         state["plots"] = [garden._empty_plot(plot_id) for plot_id in garden._PLOT_IDS]
         state["meta"]["crop_seed_box_initialized"] = True
+        # 直接声明线性记账口径，避免首次结算触发一次性迁移把
+        # last_settled_at 推到下一个午夜，干扰"结算前后 plot 原样不动"
+        # 之类的逐字段对比。
+        state["growth_accounting"] = "linear"
         crop_plots = state["plots"][:2] if two_crops else state["plots"][:1]
         for index, plot in enumerate(crop_plots, start=1):
             plot.update({

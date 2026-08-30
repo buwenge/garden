@@ -678,6 +678,59 @@ class GardenStageFV5Tests(unittest.TestCase):
         self.assertEqual(final_animal["status"], "active")
         self.assertEqual(final_animal["species"], "橘猫")
 
+    # ---- 21. 浇水升级为积水锁是逐地块的，不是全院共享一把 ------------------
+
+    def test_21_watering_escalation_lock_is_per_plot_not_yard_wide(self):
+        """8/13 真实事故：批量浇水时一号地在这一轮率先攒够第三次无必要
+        浇水、创建了自己的积水异常；二号地在同一次批量调用里独立攒够
+        第三次时，不应该被一号地刚建立的异常拦住（不该拦，因为它们是
+        两块独立的地，各自处理各自的浇水历史）。"""
+        self.plant("小番茄", "1")
+        self.plant("小番茄", "2")
+        self.set_moisture("1", 60)
+        self.set_moisture("2", 60)
+        first = garden.water_crops(["1", "2"], now=self.now, path=self.path)
+        self.assertEqual([r["outcome"] for r in first], ["no_need", "no_need"])
+        second = garden.water_crops(["1", "2"], now=self.now, path=self.path)
+        self.assertEqual([r["outcome"] for r in second], ["protest", "protest"])
+        third = garden.water_crops(["1", "2"], now=self.now, path=self.path)
+        self.assertEqual([r["outcome"] for r in third], ["waterlogged", "waterlogged"])
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        for plot in raw["plots"][:2]:
+            condition = plot["condition"]
+            self.assertEqual((condition["type"], condition["status"]), ("waterlogged", "active"))
+
+    def test_21b_watering_escalation_still_blocked_when_same_plot_already_has_a_condition(self):
+        """逐地块的锁仍然要挡同一块地上叠第二个异常：这块地已经有一个
+        （比如虫害）异常在身，第三次无必要浇水不能再叠一个积水异常
+        把原来的异常记录覆盖掉。"""
+        self.plant("小番茄", "1")
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw["plots"][0].update({"stage": "growing", "growth_points": 2.0})
+        self.path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+        class _PestRng:
+            def random(self):
+                return 0.0
+
+            def choice(self, values):
+                values = list(values)
+                return "pest" if "pest" in values else values[0]
+
+        with patch.dict(os.environ, {"GARDEN_NATURAL_CROP_CONDITIONS_ENABLED": "1"}):
+            garden.run_tick(self.now, rng=_PestRng(), path=self.path)
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(raw["plots"][0]["condition"]["type"], "pest")
+
+        self.set_moisture("1", 60)
+        outcomes = [
+            garden.water_crop("1", now=self.now, path=self.path)["outcome"]
+            for _ in range(3)
+        ]
+        self.assertEqual(outcomes, ["no_need", "protest", "blocked_by_condition"])
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(raw["plots"][0]["condition"]["type"], "pest")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -944,13 +944,10 @@ class GardenStageEGeneratorTests(unittest.TestCase):
                     announced=True,
                 )
             elif expected == "blocked_by_condition":
-                other = state["plots"][1]
-                other.update({
-                    "status": "growing", "crop_id": "cucumber",
-                    "cycle_id": "other-condition",
-                })
+                # 锁是逐地块的（8/13 修复：批量浇水时不该被别的地块的异常
+                # 拦住），所以要拦住这块地本身得先有一个自己的异常在身。
                 garden._create_crop_condition(
-                    state, other, "pest", now - timedelta(minutes=10),
+                    state, plot, "pest", now - timedelta(minutes=10),
                     announced=True,
                 )
             result, _ = garden._water_crop_v5_unlocked(

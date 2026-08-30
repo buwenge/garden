@@ -203,12 +203,29 @@ class GardenEnvironmentStageCTests(unittest.TestCase):
         context = garden.calendar_context(garden._date_at_start(day))
         return 1.0 + (0.1 if context.term_id in crop["term_affinities"] else 0.0)
 
-    def _planting_day_partial(self, crop, planted_at):
-        """种下当天剩余小时按比例记的那一笔账，跟 garden.plant_crop 同口径。"""
-        day_start = garden._date_at_start(planted_at.date())
-        fraction_remaining = (day_start + timedelta(days=1) - planted_at).total_seconds() / 86400.0
-        base = self._base_for(crop, planted_at.date())
-        return round(base * fraction_remaining, 4)
+    def _linear_expected(self, crop, start, now, exposure=None):
+        """线性记账参考实现：按天分段累计 [start, now) 的生长。
+
+        第 N 天的速率读取第 N-1 个、已经完整结束的环境日暴露（缺失即
+        中性 1.0），一天之内速率恒定，增量按段内时长线性摊分——与
+        garden._accrue_linear_growth 同口径，但独立实现以互相印证。
+        """
+        exposure = exposure or {}
+        expected = 0.0
+        cursor = start
+        while cursor < now:
+            day = cursor.astimezone(TZ).date()
+            day_end = garden._date_at_start(day) + timedelta(days=1)
+            seg_end = min(now, day_end)
+            multiplier = garden_weather.daily_growth_multiplier(
+                exposure.get((day - timedelta(days=1)).isoformat()),
+                heat_tendency=crop["heat_tendency"],
+            )
+            expected += self._base_for(crop, day) * multiplier * (
+                (seg_end - cursor).total_seconds() / 86400.0
+            )
+            cursor = seg_end
+        return expected
 
     def test_natural_growth_uses_settled_exposure_for_completed_day_only(self):
         """生长日期保持第四版节奏，但只读取它前一个、已经完整结束的
@@ -227,35 +244,36 @@ class GardenEnvironmentStageCTests(unittest.TestCase):
         }
         self._write_raw(raw)
 
+        exposure = self._raw()["plots"][0]["soil"]["exposure_by_date"]
         now = datetime(2026, 7, 27, 8, 0, tzinfo=TZ)
         snapshot = garden.crop_snapshot(now=now, path=self.path)
         actual_growth = snapshot["plots"][0]["growth_points"]
 
-        multiplier_0725 = garden_weather.daily_growth_multiplier(hot_adequate, heat_tendency="warm_loving")
-        multiplier_0726 = garden_weather.daily_growth_multiplier(hot_dry, heat_tendency="warm_loving")
-        base_0726 = self._base_for(crop, date(2026, 7, 26))
-        base_0727 = self._base_for(crop, date(2026, 7, 27))
-        expected = (
-            self._planting_day_partial(crop, planted_at)
-            + base_0726 * multiplier_0725 + base_0727 * multiplier_0726
-        )
+        # 07-27 白天的速率读取已结束的 07-26（hot_dry）；提前摆入的
+        # 07-27 桶（hot_adequate）绝不能被当天使用——参考实现按同一
+        # 规则累计，二者对得上即证明没有偷读今天。
+        expected = self._linear_expected(crop, planted_at, now, exposure)
         self.assertAlmostEqual(actual_growth, round(expected, 4), places=3)
         self.assertNotIn("growth_multiplier_pending", self._raw()["plots"][0])
 
-        # 同一天重复查看不重复结算，也不会改读今天的暴露。
-        repeated = garden.crop_snapshot(
-            now=datetime(2026, 7, 27, 20, 0, tzinfo=TZ), path=self.path,
+        # 同一天再次查看：只按流逝的时间线性多累计（仍用 07-26 的桶），
+        # 不重复入账、也不改读今天的暴露。
+        later_same_day = datetime(2026, 7, 27, 20, 0, tzinfo=TZ)
+        repeated = garden.crop_snapshot(now=later_same_day, path=self.path)
+        self.assertGreater(repeated["plots"][0]["growth_points"], actual_growth)
+        self.assertAlmostEqual(
+            repeated["plots"][0]["growth_points"],
+            round(self._linear_expected(crop, planted_at, later_same_day, exposure), 4),
+            places=3,
         )
-        self.assertEqual(repeated["plots"][0]["growth_points"], actual_growth)
 
-        # 到次日，07-27 已完整，才由 07-28 这笔生长读取一次。
+        # 到次日，07-27 已完整，才轮到 07-28 这一天读取它。
         next_day = datetime(2026, 7, 28, 8, 0, tzinfo=TZ)
         snapshot2 = garden.crop_snapshot(now=next_day, path=self.path)
-        multiplier_0727 = garden_weather.daily_growth_multiplier(hot_adequate, heat_tendency="warm_loving")
-        base_0728 = self._base_for(crop, date(2026, 7, 28))
-        expected2 = expected + base_0728 * multiplier_0727
         self.assertAlmostEqual(
-            snapshot2["plots"][0]["growth_points"], round(expected2, 4), places=3,
+            snapshot2["plots"][0]["growth_points"],
+            round(self._linear_expected(crop, planted_at, next_day, exposure), 4),
+            places=3,
         )
 
     def test_missing_exposure_bucket_is_neutral_not_punitive(self):
@@ -267,16 +285,8 @@ class GardenEnvironmentStageCTests(unittest.TestCase):
         actual_growth = snapshot["plots"][0]["growth_points"]
 
         crop = garden_crops.CROPS["tomato"]
-        expected = self._planting_day_partial(crop, planted_at)
-        cursor = planted_at.date() + timedelta(days=1)
-        end = now.date()
-        # 天气数据完全缺失时倍率恒为中性 1.0，生长日期仍按第四版节奏
-        # 立即结算，所以这里跟 v4 一样按 cursor <= end 累计。
-        while cursor <= end:
-            context = garden.calendar_context(garden._date_at_start(cursor))
-            if context.season in crop["seasons"]:
-                expected += 1.0 + (0.1 if context.term_id in crop["term_affinities"] else 0.0)
-            cursor += timedelta(days=1)
+        # 天气数据完全缺失时倍率恒为中性 1.0，生长仍按线性记账正常累计。
+        expected = self._linear_expected(crop, planted_at, now)
         self.assertAlmostEqual(actual_growth, round(expected, 4), places=3)
 
     def test_active_condition_still_fully_pauses_growth_regardless_of_weather(self):
@@ -334,14 +344,8 @@ class GardenEnvironmentStageCTests(unittest.TestCase):
         raw = self._raw()
         self.assertEqual(raw["version"], 4)
         crop = garden_crops.CROPS["tomato"]
-        expected = self._planting_day_partial(crop, planted_at)
-        cursor = planted_at.date() + timedelta(days=1)
-        end = now.date()
-        while cursor <= end:
-            context = garden.calendar_context(garden._date_at_start(cursor))
-            if context.season in crop["seasons"]:
-                expected += 1.0 + (0.1 if context.term_id in crop["term_affinities"] else 0.0)
-            cursor += timedelta(days=1)
+        # v4（无环境数据）路径下倍率恒为中性 1.0 的线性记账。
+        expected = self._linear_expected(crop, planted_at, now)
         self.assertAlmostEqual(snapshot["plots"][0]["growth_points"], round(expected, 4), places=3)
 
     def _plant_with_uniform_weather(self, path, *, planted_at, days, bucket_factory):
@@ -388,15 +392,12 @@ class GardenEnvironmentStageCTests(unittest.TestCase):
 
         self.assertAlmostEqual(jump_growth, daily_growth, places=4)
         crop = garden_crops.CROPS["tomato"]
-        expected = self._planting_day_partial(crop, planted_at)
-        for index in range(span_days):
-            environment_day = planted_at.date() + timedelta(days=index)
-            growth_day = environment_day + timedelta(days=1)
-            base = self._base_for(crop, growth_day)
-            multiplier = garden_weather.daily_growth_multiplier(
-                hot_dry(environment_day), heat_tendency=crop["heat_tendency"],
-            )
-            expected += base * multiplier
+        exposure = {
+            (planted_at.date() + timedelta(days=index)).isoformat():
+                hot_dry(planted_at.date() + timedelta(days=index))
+            for index in range(span_days)
+        }
+        expected = self._linear_expected(crop, planted_at, jump_now, exposure)
         self.assertAlmostEqual(jump_growth, round(expected, 4), places=3)
         self.assertLess(jump_growth, span_days * 1.1 - 0.01)
         self.assertEqual(jump_snapshot["plots"][0]["status"], "growing")
@@ -460,65 +461,61 @@ class GardenEnvironmentStageCTests(unittest.TestCase):
         )
 
     def test_previous_environment_day_applies_exactly_once(self):
-        """07-27 的生长读取已结束的 07-26 环境；同日重复查看不重复，
-        也不会读取仍未结束的 07-27 环境。"""
+        """07-27 全天的生长速率读取已结束的 07-26 环境；同日反复查看只按
+        流逝时间累计、不重复入账，也不会改读仍未结束的 07-27 环境。"""
         planted_at = datetime(2026, 7, 25, 8, 0, tzinfo=TZ)
         self._plant(planted_at)
         hot_dry = _bucket(known_hours=24.0, dry_hours=24.0, hot_hours=24.0)
         hot_adequate = _bucket(known_hours=24.0, adequate_hours=24.0, hot_hours=24.0)
-        raw = self._raw()
-        raw["plots"][0]["soil"]["exposure_by_date"] = {
+        exposure = {
             "2026-07-26": hot_dry,
             "2026-07-27": hot_adequate,
         }
+        raw = self._raw()
+        raw["plots"][0]["soil"]["exposure_by_date"] = exposure
         self._write_raw(raw)
 
         crop = garden_crops.CROPS["tomato"]
         now = datetime(2026, 7, 27, 8, 0, tzinfo=TZ)
         snapshot = garden.crop_snapshot(now=now, path=self.path)
-        base_0726 = self._base_for(crop, date(2026, 7, 26))
-        base_0727 = self._base_for(crop, date(2026, 7, 27))
-        multiplier_0726 = garden_weather.daily_growth_multiplier(
-            hot_dry, heat_tendency=crop["heat_tendency"],
-        )
-        # 07-26 的生长找不到 07-25 暴露，安全中性；07-27 读取 07-26。
-        expected = (
-            self._planting_day_partial(crop, planted_at)
-            + base_0726 + base_0727 * multiplier_0726
-        )
+        # 07-26 的速率找不到 07-25 暴露，安全中性；07-27 的速率读取
+        # 07-26（hot_dry），即使 07-27 自己的桶已提前摆入也不得使用。
+        expected = self._linear_expected(crop, planted_at, now, exposure)
         self.assertAlmostEqual(snapshot["plots"][0]["growth_points"], round(expected, 4), places=3)
 
+        previous = snapshot["plots"][0]["growth_points"]
         for hour in (10, 14, 20):
-            repeated = garden.crop_snapshot(
-                now=datetime(2026, 7, 27, hour, 0, tzinfo=TZ), path=self.path,
+            check_at = datetime(2026, 7, 27, hour, 0, tzinfo=TZ)
+            repeated = garden.crop_snapshot(now=check_at, path=self.path)
+            self.assertGreater(repeated["plots"][0]["growth_points"], previous)
+            self.assertAlmostEqual(
+                repeated["plots"][0]["growth_points"],
+                round(self._linear_expected(crop, planted_at, check_at, exposure), 4),
+                places=3,
             )
-            self.assertEqual(repeated["plots"][0]["growth_points"], snapshot["plots"][0]["growth_points"])
+            previous = repeated["plots"][0]["growth_points"]
 
-        next_day = garden.crop_snapshot(
-            now=datetime(2026, 7, 28, 8, 0, tzinfo=TZ), path=self.path,
-        )
-        multiplier_0727 = garden_weather.daily_growth_multiplier(
-            hot_adequate, heat_tendency=crop["heat_tendency"],
-        )
-        base_0728 = self._base_for(crop, date(2026, 7, 28))
+        next_day_at = datetime(2026, 7, 28, 8, 0, tzinfo=TZ)
+        next_day = garden.crop_snapshot(now=next_day_at, path=self.path)
         self.assertAlmostEqual(
             next_day["plots"][0]["growth_points"],
-            round(expected + base_0728 * multiplier_0727, 4),
+            round(self._linear_expected(crop, planted_at, next_day_at, exposure), 4),
             places=3,
         )
 
     def test_neutral_v5_keeps_v4_three_four_five_day_maturation_baseline(self):
         """没有可用天气暴露时，v5 的中性倍率不能改变 v4 的成熟日期。
 
-        种下当天现在按比例先记一笔账（plant_crop），这笔账加上后续整天
-        的记账，让小番茄/南瓜比引入这笔账之前提前一天跨过成熟线；小萝卜
-        恰好在同一天跨线，不受影响。v4/v5 二者仍必须相等——这才是这条
-        测试真正要守住的不变量。
+        线性记账下生长从种下那一刻起连续累积，"生长期N天"就真的是约
+        N 天（term 加成会稍微提前一点），逐日轮询首次看到 ready 的日子
+        相应比整天记账时代晚了：整天时代跨入当天即一次性入账整天，等于
+        白捡当天还没过完的时间。v4/v5 二者仍必须相等——这才是这条测试
+        真正要守住的不变量。
         """
         cases = (
             ("小萝卜", datetime(2026, 3, 10, 8, 0, tzinfo=TZ), 3),
-            ("小番茄", datetime(2026, 7, 10, 8, 0, tzinfo=TZ), 3),
-            ("南瓜", datetime(2026, 9, 10, 8, 0, tzinfo=TZ), 4),
+            ("小番茄", datetime(2026, 7, 10, 8, 0, tzinfo=TZ), 4),
+            ("南瓜", datetime(2026, 9, 10, 8, 0, tzinfo=TZ), 5),
         )
 
         def ready_offset(path, crop_name, planted_at, *, enabled):
@@ -639,35 +636,43 @@ class GrowthEnvironmentNoteTests(unittest.TestCase):
         self.path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
 
         crop = garden_crops.CROPS["tomato"]
-        # 种下当天按比例记的那一笔账已经在 plant_crop 返回的快照里，
-        # 差值比较要从这笔账之后算起，不能假设种下瞬间是 0。
-        previous_growth = planted_snapshot["growth_points"]
+        # 线性记账下，日期 D 全天的速率恒定且读取 D-1 的环境桶；备注在
+        # D 当天任意时刻查看，方向必须对得上 D 这一天真正入账的倍率。
+        # 用相邻两个午夜整点的差值提取 D 全天实际应用的倍率。
         expected_notes = (
-            "这几天长得比平时快一点",
-            "这几天长得比平时慢一点",
-            None,
+            ("2026-07-26", "这几天长得比平时快一点"),   # 读 07-25 hot_adequate
+            ("2026-07-27", "这几天长得比平时慢一点"),   # 读 07-26 hot_dry
+            ("2026-07-28", None),                        # 读 07-27 中性
         )
-        for offset, expected_note in enumerate(expected_notes, start=1):
-            view_at = planted_at + timedelta(days=offset)
-            environment_day = view_at.date() - timedelta(days=1)
+        previous_growth = garden.crop_snapshot(
+            now=garden._date_at_start(date(2026, 7, 26)), path=self.path,
+        )["plots"][0]["growth_points"]
+        for day_iso, expected_note in expected_notes:
+            day = date.fromisoformat(day_iso)
+            environment_day = day - timedelta(days=1)
             expected_multiplier = garden_weather.daily_growth_multiplier(
                 buckets[environment_day.isoformat()],
                 heat_tendency=crop["heat_tendency"],
             )
-            snapshot = garden.crop_snapshot(now=view_at, path=self.path)
-            growth_now = snapshot["plots"][0]["growth_points"]
-            delta = growth_now - previous_growth
-            previous_growth = growth_now
-            context = garden.calendar_context(garden._date_at_start(view_at.date()))
-            base = 1.0 + (
-                0.1 if context.term_id in crop["term_affinities"] else 0.0
+            # 备注在 D 当天中午查看，描述的正是当天正在应用的倍率方向。
+            midday = garden.crop_snapshot(
+                now=garden._date_at_start(day) + timedelta(hours=12), path=self.path,
             )
-            applied_multiplier = delta / base
-            self.assertAlmostEqual(applied_multiplier, expected_multiplier, places=3)
             self.assertEqual(
-                garden.growth_environment_note(snapshot["plots"][0], view_at),
+                garden.growth_environment_note(
+                    midday["plots"][0], garden._date_at_start(day) + timedelta(hours=12),
+                ),
                 expected_note,
             )
+            day_end_growth = garden.crop_snapshot(
+                now=garden._date_at_start(day + timedelta(days=1)), path=self.path,
+            )["plots"][0]["growth_points"]
+            delta = day_end_growth - previous_growth
+            previous_growth = day_end_growth
+            context = garden.calendar_context(garden._date_at_start(day))
+            base = 1.0 + (0.1 if context.term_id in crop["term_affinities"] else 0.0)
+            applied_multiplier = delta / base
+            self.assertAlmostEqual(applied_multiplier, expected_multiplier, places=3)
         self.assertNotIn(
             "growth_multiplier_pending",
             json.loads(self.path.read_text(encoding="utf-8"))["plots"][0],

@@ -377,24 +377,25 @@ class HandleGardenTests(unittest.TestCase):
         raw["inventory"]["seeds"]["cucumber"] = 2
         self.path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
 
-        def ripen_plot_one():
+        def ripen_plot(index):
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            data["plots"][0]["status"] = "ready"
-            data["plots"][0]["stage"] = "ready"
-            data["plots"][0]["growth_points"] = 4.0
-            data["plots"][0]["ready_at"] = now.isoformat()
+            data["plots"][index]["status"] = "ready"
+            data["plots"][index]["stage"] = "ready"
+            data["plots"][index]["growth_points"] = 4.0
+            data["plots"][index]["ready_at"] = now.isoformat()
             self.path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
         garden.plant_crop("黄瓜", "1", now=now)
-        ripen_plot_one()
+        ripen_plot(0)
         with patch("home.random.random", return_value=0.99):
             plain = home.handle_garden(self._request(["院子", "收获", "1"]))
         self.assertIn("可以做：凉拌黄瓜、拍黄瓜。", plain)
 
-        garden.plant_crop("黄瓜", "1", now=now)
-        ripen_plot_one()
+        # 换到二号地继续验证"惊喜收获"分支，跟一号地互不影响。
+        garden.plant_crop("黄瓜", "2", now=now)
+        ripen_plot(1)
         with patch("home.random.random", return_value=0.01):
-            surprised = home.handle_garden(self._request(["院子", "收获", "1"]))
+            surprised = home.handle_garden(self._request(["院子", "收获", "2"]))
         self.assertIn("结果：黄瓜×", surprised)
         self.assertIn("种子返还×", surprised)
         self.assertIn("可以做：凉拌黄瓜、拍黄瓜。", surprised)
@@ -585,7 +586,17 @@ class HandleGardenTests(unittest.TestCase):
         self.assertIn("home 院子 --help", message)
         self.assertLessEqual(len(message), 220)
 
+    def _mute_calendar_moments(self):
+        # 2026-08-19 七夕实锤：这几个鸡舍用例用真实当前日期驱动 run_tick，
+        # 撞上节日/节气当天时 calendar_moment 会先入队占住 pending 租约，
+        # 鸡蛋事件永远排不进来，用例在节日当天必挂。日历时刻有自己的
+        # 专项用例（显式指定日期），这里按住不让它入队，只考察鸡舍链路。
+        muted = patch.object(garden, "_queue_calendar_moments", lambda state, context: False)
+        muted.start()
+        self.addCleanup(muted.stop)
+
     def test_natural_egg_offer_precedes_coop_and_incubation_builds_it(self):
+        self._mute_calendar_moments()
         premature = home.handle_garden(self._request(["院子", "搭个鸡窝吧"]))
         self.assertIn("不会提前搭鸡舍", premature)
         self.assertFalse(garden.coop_snapshot()["built"])
@@ -607,6 +618,7 @@ class HandleGardenTests(unittest.TestCase):
         )
 
     def test_natural_chicken_interactions_target_one_chicken_and_return_results(self):
+        self._mute_calendar_moments()
         now = datetime.now(TZ)
         animal = garden.spawn(
             "animal", species="荷兰侏儒兔", intro="x", category="兔子",
@@ -638,6 +650,7 @@ class HandleGardenTests(unittest.TestCase):
         # 连续给三只鸡取名（"9e3b叫霜 077e叫桂圆 6253叫芝麻"）此前完全解析不出来，
         # 落到"没听懂要做什么"；旧的单只鸡分支还依赖 `_garden_chicken_mention`
         # 按昵称/完整 id 子串匹配，孵出还没取名的鸡拿短编号前缀根本对不上。
+        self._mute_calendar_moments()
         now = datetime.now(TZ)
         garden.spawn(
             "animal", species="荷兰侏儒兔", intro="x", category="兔子",
@@ -705,6 +718,14 @@ class HandleGardenTests(unittest.TestCase):
         raw["inventory"]["seeds"][crop_id] = raw["inventory"]["seeds"].get(crop_id, 0) + 1
         self.path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
         home.handle_garden(self._request(["院子", "播种", crop_name, "一号菜畦"]))
+        # 播种当天剩余时间会按比例先记一笔初始生长加成（见 garden.plant_crop），
+        # 越早的真实运行时刻剩的时间越多、加成越大，偶尔会让作物一种下就直接
+        # 越过发芽门槛，导致本用例断言的"刚播下"跟测试运行的真实时刻绑定、
+        # 时灵时不灵（8/13 发现的老毛病）。这里直接把生长点数清零，只固定
+        # "种下当天就是种子阶段"这一个事实，不引入冻结真实时钟的新依赖。
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        next(p for p in raw["plots"] if p["plot_id"] == "p1")["growth_points"] = 0.0
+        self.path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
         home.handle_garden(self._request(["院子", "浇水", "一号菜畦"]))
         output = home.handle_garden(self._request(["院子", "查看", "详细"]))
         self.assertIn(f"{crop_name} · 刚播下 · 今日已浇水，土还湿着", output)

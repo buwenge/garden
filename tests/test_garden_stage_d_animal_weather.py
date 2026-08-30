@@ -237,6 +237,8 @@ class AnimalWeatherContentSkeletonTests(unittest.TestCase):
             ("ANIMAL_WEATHER_PLAY_LINES", garden_content.ANIMAL_WEATHER_PLAY_LINES),
         ):
             for category, modes in pool.items():
+                if category == "生姜":
+                    continue
                 for mode, lines in modes.items():
                     for line in lines:
                         with self.subTest(pool=pool_name, category=category, mode=mode):

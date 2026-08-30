@@ -240,7 +240,8 @@ def _garden_food_help() -> str:
 home 院子 制作 <食谱名>（缺食材会说明需要什么）
 {stock_line}
 查某样食材：home 院子 食谱 <作物名>；全部：home 院子 食谱大全
-home 院子 送给user <食物或收获>"""
+home 院子 送给user <食物或成品名> [便签内容]（便签可省略；例：送给user 凉拌黄瓜 这是刚拌的）
+home 院子 送给另一只agent <食物或成品名> [便签内容]"""
 
 
 def garden_help(topic: str | None = None) -> str:
@@ -257,6 +258,7 @@ home 院子 把辣椒种到三号地
 home 院子 全部浇水 / 给二号地浇点水
 home 院子 收获二号地
 有异常时直接说：给二号地除虫、修剪、松土、施肥或清理。
+施肥要消耗肥料×1（打扫鸡舍攒堆肥获得）；退水后给内涝欠佳的地施肥能救回品相。
 home 院子 现在能种什么（查当季能种的种子）
 home 院子 仓库（看不是当季、暂存起来的种子）""",
         "animal": """动物：
@@ -267,7 +269,9 @@ home 院子 取名 <动物名字或编号> <新名字>
         "coop": """鸡舍：
 小动物送来鸡蛋后可说：我来孵那三枚蛋 / 吃掉那三枚蛋。
 选择孵化时才会搭起鸡舍；之后可说：查看鸡舍。
-母鸡偶尔会下出可孵化鸡蛋，可说：孵化可孵化鸡蛋。""",
+母鸡偶尔会下出可孵化鸡蛋，可说：孵化可孵化鸡蛋。
+成鸡每天会攒鸡粪，可说：打扫鸡舍——收走的鸡粪发酵两天变成肥料，
+给有缺肥异常的地施肥能治好，退水后也能救回内涝欠佳的地块。""",
     }
     if topic in pages:
         return pages[topic]
@@ -467,9 +471,39 @@ def _garden_attention_items(
     if coop["story_status"] == "awaiting_choice":
         items.append(
             f"{coop['source_animal_name']}送来的鸡蛋×{coop['egg_count']}"
-            "还在等agent 决定吃掉还是孵化"
+            "还在等 agent 决定吃掉还是孵化"
         )
+    # 鸡粪攒满提醒；单句既有模式，不用池，也不以"X号地"开头，因此不会被
+    # 下面的合并逻辑意外并进地块提示里。
+    manure_units = int(coop.get("manure_units") or 0)
+    manure_cap = int(coop.get("manure_cap") or 0)
+    if manure_cap > 0 and manure_units >= manure_cap:
+        items.append("鸡舍攒了不少鸡粪，该打扫了")
     return items
+
+
+_PLOT_ATTENTION_LABEL_RE = re.compile(r"^(\d)号地(.*)$")
+
+
+def _merge_plot_attention_notes(notes: list[str]) -> list[str]:
+    """多块地提醒文字完全相同时合并成一行：
+    "1号地土壤湿透，先别浇水"+"4号地土壤湿透，先别浇水" → "1、4号地土壤湿透，先别浇水"。
+    不是"X号地"开头的提醒（动物/鸡舍）原样保留，相对顺序不变。"""
+    buckets: dict[str, list[str]] = {}
+    order: list[str] = []
+    others: list[str] = []
+    for note in notes:
+        match = _PLOT_ATTENTION_LABEL_RE.match(note)
+        if match is None:
+            others.append(note)
+            continue
+        number, suffix = match.groups()
+        if suffix not in buckets:
+            buckets[suffix] = []
+            order.append(suffix)
+        buckets[suffix].append(number)
+    merged = [f"{'、'.join(buckets[suffix])}号地{suffix}" for suffix in order]
+    return merged + others
 
 
 def _garden_plots_compact_line(plots: list[dict], crop_state: dict) -> str | None:
@@ -679,7 +713,9 @@ def _garden_list_active() -> str:
         plot.get("status") != "empty" for plot in plots
     ) and not yard_water_line:
         return _GARDEN_EMPTY_TEXT
-    attention = _garden_attention_items(plots, crop_state, entries, coop, now)
+    attention = _merge_plot_attention_notes(
+        _garden_attention_items(plots, crop_state, entries, coop, now)
+    )
     attention_line = "要留意：" + "；".join(attention) + "。" if attention else None
     fingerprint = _garden_view_fingerprint(
         plots, entries, away, coop, crop_state.get("environment"),
@@ -751,6 +787,30 @@ def _garden_list_active_detailed() -> str:
     return "小院子现在有：\n" + "\n".join(yard_lines + lines + crop_lines + coop_lines)
 
 
+def _garden_coop_manure_suffix(coop: dict) -> str:
+    """鸡粪份数/堆肥角/肥料库存追加行，只在鸡舍真的建好时有意义。鸡粪份数
+    固定展示，堆肥角只在有批次发酵时展示，肥料库存只在大于 0 时展示——
+    三段各自独立，缺哪段就不占那一段的版面。
+    """
+    units = int(coop.get("manure_units") or 0)
+    cap = int(coop.get("manure_cap") or 0)
+    manure_text = f"鸡粪×{units}"
+    if cap > 0:
+        manure_text += f"/{cap}"
+    if cap > 0 and units >= cap:
+        manure_text += "（攒满了，该打扫鸡舍了）"
+    parts = [manure_text]
+    for batch in coop.get("compost_batches") or []:
+        seconds = int(batch.get("remaining_seconds") or 0)
+        hours, remainder = divmod(seconds, 3600)
+        minutes = remainder // 60
+        parts.append(f"堆肥角：{int(batch.get('units', 0))}份发酵中，约剩{hours}小时{minutes}分")
+    fertilizer_count = int(coop.get("fertilizer_count") or 0)
+    if fertilizer_count > 0:
+        parts.append(f"肥料×{fertilizer_count}")
+    return "\n" + "；".join(parts)
+
+
 def _garden_coop_line(coop: dict) -> str:
     status = coop["story_status"]
     if status == "awaiting_choice":
@@ -764,7 +824,7 @@ def _garden_coop_line(coop: dict) -> str:
             f"鸡舍 · agent 正在亲自孵鸡蛋×{count}，约剩{hours}小时{minutes}分；"
             f"成鸡母×{coop.get('hen_count', 0)}、公×{coop.get('rooster_count', 0)}，"
             f"篮子可孵化鸡蛋×{coop.get('hatchable_egg_count', 0)}。"
-        )
+        ) + _garden_coop_manure_suffix(coop)
     if status == "hatched":
         if coop.get("chick_count"):
             young_hens = sum(
@@ -782,13 +842,13 @@ def _garden_coop_line(coop: dict) -> str:
                 f"鸡舍 · 小母鸡×{young_hens}、小公鸡×{young_roosters}，"
                 f"约剩{hours}小时{minutes}分长大；成鸡母×{coop.get('hen_count', 0)}、"
                 f"公×{coop.get('rooster_count', 0)}。"
-            )
+            ) + _garden_coop_manure_suffix(coop)
         return (
             f"鸡舍 · 母鸡×{coop.get('hen_count', 0)}、公鸡×{coop.get('rooster_count', 0)}；"
             f"篮子鸡蛋×{coop['egg_count']}、可孵化鸡蛋×{coop.get('hatchable_egg_count', 0)}，"
             f"累计下蛋×{coop.get('total_eggs_laid', 0)}。"
-        )
-    return "鸡舍 · 已经搭好。"
+        ) + _garden_coop_manure_suffix(coop)
+    return "鸡舍 · 已经搭好。" + _garden_coop_manure_suffix(coop)
 
 
 def _garden_coop_status() -> str:
@@ -828,12 +888,12 @@ def _garden_view_plot(selector: str) -> str:
     by_id = {plot["plot_id"]: plot for plot in crop_state["plots"]}
     selected_ids = set(plot_ids)
     lines = [_garden_plot_line(by_id[plot_id], crop_state, now) for plot_id in plot_ids]
-    notes = [
+    notes = _merge_plot_attention_notes([
         note for plot in crop_state["plots"]
         if plot["plot_id"] not in selected_ids
         for note in [_garden_plot_attention(plot, crop_state)]
         if note
-    ]
+    ])
     output = "\n".join(lines)
     if notes:
         output += "\n提示：" + "，".join(notes) + "。"
@@ -859,6 +919,10 @@ def _garden_basket() -> str:
     lines.append(
         f"蛋类：{render('animal_products', {key: {'name': name} for key, name in garden.ANIMAL_PRODUCT_NAMES.items()})}"
     )
+    # 肥料只在大于 0 时显示，不占空篮子的版面。
+    fertilizer_count = int(inventory.get("fertilizer", {}).get("fertilizer", 0))
+    if fertilizer_count > 0:
+        lines.append(f"肥料：{fertilizer_count}份")
     return "\n".join(lines)
 
 
@@ -1129,6 +1193,30 @@ def _garden_crop_treatment_text(
         f"{body}\n"
         f"结果：{plot}地状态未改变；目前不需要{action}。"
     )
+
+
+def _garden_fertilize_result_text(result: dict) -> str:
+    """施肥的三种正常结果落回文案。
+
+    ``kind == "condition"``：治缺肥成功，跟既有 resolve_crop_condition 的
+    resolved 结果形状完全一致，直接复用 `_garden_crop_treatment_text` 与
+    既有成功文案池（garden_content 里 nutrient_deficiency 的既有文案，不
+    重写）。另外两种是品质救援结果，用新文案池；三种都不是错误——硬性
+    拒绝（需要肥料×1/地还泡着/用不上肥料）走 GardenError，不经过这里。
+    """
+    if result["kind"] == "condition":
+        outing = _garden_claim_outing()
+        return _garden_with_outing(
+            _garden_crop_treatment_text(result, use_writer=True, outing=outing),
+            outing,
+        )
+    plot = garden.plot_label(result["plot_id"])
+    name = garden.garden_crops.crop_name(result["crop_id"])
+    if result["kind"] == "quality_rescue":
+        body = _garden_action_text("fertilize_rescue", plot=plot, name=name)
+        return _garden_with_outing(f"{body}\n结果：{plot}地的{name}品质已经救回，不再是欠佳。")
+    body = _garden_action_text("fertilize_unrecoverable", plot=plot, name=name)
+    return _garden_with_outing(f"{body}\n结果：{plot}地状态未改变，品相仍是欠佳。")
 
 
 def _garden_duration_text(total_seconds: int) -> str:
@@ -1489,6 +1577,28 @@ def _garden_semantic_command(raw: str) -> str:
     if not compact:
         return raw
 
+    # 鸡舍打扫要抢在下面"已经是合法的标准形式"快速放行、以及"清理"等
+    # 作物别名判断之前拦截——"清理鸡舍"这类说法含有"清理"两个字，若不
+    # 提前处理会被 prefixed_action 早退分支直接放行成"清理鸡舍"原样传
+    # 下去，落进作物「清理」(clear_withered_crop) 而不是鸡舍打扫。命中
+    # 规则用确定性关键词收窄，不猜：含"粪"/"粑粑"/"铲屎"任一，或
+    # "打扫"/"清扫"与鸡舍类名词同现，才路由到鸡舍打扫；鸡舍类名词单独
+    # 配上"清理"这个跟作物清理撞词的动词时，宁可报错也不猜着执行。
+    _coop_noun = any(word in compact for word in ("鸡舍", "鸡窝", "鸡圈"))
+    # 光出现"粪/粑粑"不代表要打扫——"看看鸡粪"是查询、"施粪肥/撒粪肥"
+    # 是施肥的说法，都不能被截胡成真的执行打扫（这是会改状态的动作，
+    # 宁可落进后面的别名判断或报错，也不猜）。必须清扫类动词与名词同现
+    # 才算数："清理粪便/打扫粑粑/铲屎/清粪"都命中；动词表用"扫/清/铲/
+    # 收拾"四个字根，覆盖打扫/清扫/清理/清粪这些组合。
+    _manure_noun = any(word in compact for word in ("粪", "粑粑", "屎"))
+    _clean_verb = any(word in compact for word in ("扫", "清", "铲", "收拾"))
+    if (_manure_noun and _clean_verb) or (
+        _coop_noun and any(word in compact for word in ("打扫", "清扫"))
+    ):
+        return "打扫鸡舍"
+    if _coop_noun and any(word in compact for word in ("清理", "拔掉", "清掉")):
+        raise HomeError("不确定是要打扫鸡舍还是清理菜畦，可以直接说：home 院子 打扫鸡舍")
+
     # 已经是合法的标准形式时原样放行，避免兜底重排参数。
     first = normalize(tokens[0]) if tokens else ""
     exact_lengths = {
@@ -1687,6 +1797,16 @@ def handle_garden(request: Request) -> str:
             return _garden_list_active_detailed()
         if text in ("鸡舍", "查看鸡舍", "鸡舍状态"):
             return _garden_coop_status()
+        if text == "打扫鸡舍":
+            if request.dry_run:
+                return "将打扫鸡舍，把攒下的鸡粪收进堆肥角"
+            result = garden.care_chicken(None, "clean")
+            units = result["units"]
+            log_store.write_log("info", "activity", f"小院子：打扫鸡舍，收走鸡粪×{units}")
+            if units <= 0:
+                return _garden_with_outing(_garden_action_text("coop_clean_empty"))
+            body = _garden_action_text("coop_clean", units=units)
+            return _garden_with_outing(f"{body}\n结果：鸡粪×{units}已经收进堆肥角，约两天发酵好。")
         if text == "建鸡舍":
             coop = garden.coop_snapshot()
             if coop["built"]:
@@ -1933,6 +2053,14 @@ def handle_garden(request: Request) -> str:
                     f"把{plot}地里枯死的{name}残株和根系清了出去。\n"
                     f"结果：{plot}地已清理为空地；没有返还种子或作物。"
                 )
+            if crop_action == "施肥":
+                # 施肥统一改走 garden.fertilize_plot，内部按确定性优先级
+                # 分流治缺肥/救品质/救不回/用不上；报错文案（需要肥料×1/
+                # 地还泡着/用不上肥料）直接是 GardenError，走下面 except
+                # 分支，这里只处理成功与"救不回"两类正常结果。出门天气句
+                # 已经在 _garden_fertilize_result_text 内部按各分支的既有
+                # 惯例附加过，这里不再重复 _garden_with_outing。
+                return _garden_fertilize_result_text(garden.fertilize_plot(selector))
             result = garden.resolve_crop_condition(crop_action, selector)
             outing = _garden_claim_outing()
             return _garden_with_outing(

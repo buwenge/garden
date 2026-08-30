@@ -630,11 +630,13 @@ class GardenStageDHomeTests(unittest.TestCase):
         dry_clear.assert_not_called()
 
     def test_home_routes_each_treatment_action_and_keeps_result_explicit(self):
+        # 第八版：「施肥」改走 garden.fertilize_plot，不再经过
+        # resolve_crop_condition（见 tests/test_garden_fertilizer.py 的
+        # 治缺肥专项覆盖），这里只保留其余三个仍走旧路径的处理动作。
         for action, condition_type in (
             ("除虫", "pest"),
             ("修剪", "diseased_leaf"),
             ("松土", "waterlogged"),
-            ("施肥", "nutrient_deficiency"),
         ):
             with self.subTest(action=action), patch(
                 "home.garden.resolve_crop_condition",
@@ -647,6 +649,21 @@ class GardenStageDHomeTests(unittest.TestCase):
                 output = home.handle_garden(self._request(action, "一号地"))
             self.assertIn("结果：", output)
             resolve.assert_called_once_with(action, "一号地")
+
+    def test_home_routes_fertilize_action_to_fertilize_plot(self):
+        with patch(
+            "home.garden.fertilize_plot",
+            return_value={
+                "kind": "condition",
+                "plot_id": "p1", "crop_id": "tomato",
+                "action": "施肥", "outcome": "resolved",
+                "condition_type": "nutrient_deficiency", "correct_action": "施肥",
+                "yield_penalty": 0,
+            },
+        ) as fertilize:
+            output = home.handle_garden(self._request("施肥", "一号地"))
+        self.assertIn("结果：", output)
+        fertilize.assert_called_once_with("一号地")
 
     def test_view_acknowledges_and_displays_active_condition(self):
         now = datetime.now(TZ)
@@ -691,6 +708,43 @@ class GardenStageDHomeTests(unittest.TestCase):
             raw["plots"][0]["condition"]["condition_id"],
             condition["condition_id"],
         )
+
+    def test_view_merges_identical_attention_notes_across_plots(self):
+        """8/13 反馈：两块地的提醒文字完全一样时（比如都缺水）不应该
+        各占一句用"；"接起来，应该合并成"1、2号地缺水"这样一句。"""
+        now = datetime.now(TZ)
+        state = garden._empty_state()
+        state.pop("entries")
+        state["plots"] = [
+            garden._empty_plot(plot_id) for plot_id in garden._PLOT_IDS
+        ]
+        state["meta"]["crop_seed_box_initialized"] = True
+        for plot_id in ("p1", "p2"):
+            plot = next(p for p in state["plots"] if p["plot_id"] == plot_id)
+            plot.update({
+                "crop_id": "tomato",
+                "planted_at": (now - timedelta(days=1)).isoformat(),
+                "last_settled_at": now.isoformat(),
+                "growth_points": 1.0,
+                "stage": "sprout",
+                "water_bonus_dates": [],
+                "watering_by_date": {},
+                "ready_at": None,
+                "status": "growing",
+                "cycle_id": f"cycle-{plot_id}",
+                "stage_events_seen": [],
+            })
+            condition = garden._create_crop_condition(
+                state, plot, "pest", now, announced=False,
+            )
+            garden._queue_condition_event(state, plot, "warning")
+        self.path.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+
+        output = home.handle_garden(self._request("查看"))
+        self.assertIn("1、2号地虫害中，先除虫", output)
+        self.assertNotIn("1号地虫害中，先除虫；2号地虫害中，先除虫", output)
 
     def test_view_uses_cycle_penalty_after_a_new_zero_penalty_condition(self):
         plot = {

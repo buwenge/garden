@@ -227,7 +227,11 @@ class GardenStrollTests(unittest.TestCase):
         self.assertEqual(resolved["outcome"], "resolved")
         self.assertEqual(restored, healthy)
         self.assertNotEqual(first_id, second_id)
-        self.assertNotEqual(first_scene, second_scene)
+        # 不断言 first_scene != second_scene：兜底文案由快照哈希从候选句池
+        # 确定性挑选，快照里唯一的差异是 condition_id 的随机 uuid，约 3% 的
+        # 概率两个哈希在每个句槽都挑中同一句（30 次实测撞过 1 次），文案逐字
+        # 相同是合法结果。"复发拿到新 key、不复用缓存"由 id 不同、写手调用
+        # 次数和下面三个互异 scene_key 完整锁住。
         self.assertIn("积水", second_scene)
         self.assertEqual(writer.call_count, 3)
         raw = json.loads(self.path.read_text(encoding="utf-8"))
@@ -401,7 +405,7 @@ class GardenStrollGeneratorTests(unittest.TestCase):
 
     def test_writer_snapshot_is_an_explicit_allowlist(self):
         snapshot = json.loads(json.dumps(self.snapshot, ensure_ascii=False))
-        snapshot["private_weather_cache_path"] = "weather_cache.json"
+        snapshot["private_weather_cache_path"] = "/opt/xiaoyubot/weather_cache.json"
         snapshot["beijing_date"] = "2026-07-28"
         snapshot["plots"][0].update({
             "soil_state": "偏干", "water_source": "rain", "moisture": 42.1,

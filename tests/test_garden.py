@@ -726,7 +726,7 @@ class CoopStoryTests(unittest.TestCase):
         ))
 
         egg_at = started + timedelta(hours=39)
-        # 每只母鸡先掷下蛋概率（<0.3命中），命中的再掷可孵化概率（此处不命中）。
+        # 每只母鸡先掷下蛋概率（<0.2命中），命中的再掷可孵化概率（此处不命中）。
         eggs = garden.run_tick(egg_at, rng=_StubRng([0.1, 0.5, 0.1, 0.5]), path=self.path)
         self.assertEqual((eggs["type"], eggs["eggs_laid"], eggs["hens_laid"]), ("coop_life", 2, 2))
         self.assertTrue(garden.confirm_pending_event(
@@ -1710,40 +1710,46 @@ class CropSystemTests(unittest.TestCase):
         self.assertEqual(garden.crop_snapshot(now=self.summer + timedelta(days=1), path=self.path)["plots"][0]["stage"], "sprout")
         self.assertEqual(garden.crop_snapshot(now=self.summer + timedelta(days=2), path=self.path)["plots"][0]["stage"], "growing")
         ready = garden.crop_snapshot(now=self.summer + timedelta(days=4), path=self.path)["plots"][0]
-        # 种下当天（7/10 正午）剩余12小时按比例先记了0.55点账，见 plant_crop。
-        self.assertEqual((ready["status"], ready["stage"], ready["growth_points"]), ("ready", "ready", 4.95))
+        # 线性记账：7/10 正午种下，到 7/14 正午恰好 4 个整天，按小暑
+        # 1.1/天累积 4.4 点；成熟翻转后不再继续结算。
+        self.assertEqual((ready["status"], ready["stage"], ready["growth_points"]), ("ready", "ready", 4.4))
         later = garden.crop_snapshot(now=self.summer + timedelta(days=40), path=self.path)["plots"][0]
-        self.assertEqual((later["status"], later["growth_points"]), ("ready", 4.95))
+        self.assertEqual((later["status"], later["growth_points"]), ("ready", 4.4))
 
     def test_planting_day_gets_proportional_credit_instead_of_being_skipped(self):
-        """种下当天不该被结算循环整天跳过白算成0点。
+        """种下当天不该被结算整天跳过白算成0点。
 
-        8/7 辣椒事故背后的真实原因：整套按天记账的结算只从"种下次日"开始
-        累计，种下当天不管种得多早，那一天都完全不计入生长——种得越接近
-        午夜0点，白白损失的时间就越接近一整天，"生长期N天"实际到手要
-        比N天多出小半天到近一天。这里种下当天固定给一笔按剩余小时比例
-        换算的账，越接近午夜种、这笔账越接近满额一天；越接近当天24点种、
-        这笔账越接近0——不该是死板的"种下当天永远0点"。
+        8/7 辣椒事故背后的真实原因：老的按天记账只从"种下次日"开始累计，
+        种下当天完全不计入生长。线性记账下生长从种下那一刻起随时间自然
+        累积——种得越早、当天午夜前累积到的越接近满额一天；种得越晚越
+        接近0——同样不存在"种下当天永远0点"的死账。
         """
         garden.crop_snapshot(now=datetime(2026, 7, 10, 0, 0, tzinfo=TZ), path=self.path)
         early = garden.plant_crop(
             "小番茄", "1", now=datetime(2026, 7, 10, 0, 5, tzinfo=TZ), path=self.path,
         )
-        self.assertGreater(early["growth_points"], 0.0)
-        # 00:05 种下，当天几乎还剩满24小时，这笔账应接近（但小于）一整天
+        # 种下那一瞬还没有时间流逝，进度是真实的 0。
+        self.assertEqual(early["growth_points"], 0.0)
+        # 到当天 23:59，00:05 种下的这棵已经累积了接近（但小于）一整天
         # 的满额生长量（term 加成后单日满额是1.1）。
-        self.assertGreater(early["growth_points"], 1.0)
-        self.assertLess(early["growth_points"], 1.1)
+        early_late_check = garden.crop_snapshot(
+            now=datetime(2026, 7, 10, 23, 59, tzinfo=TZ), path=self.path,
+        )["plots"][0]
+        self.assertGreater(early_late_check["growth_points"], 1.0)
+        self.assertLess(early_late_check["growth_points"], 1.1)
 
         late_path = Path(self.tempdir.name) / "late.json"
         garden.crop_snapshot(now=datetime(2026, 7, 10, 0, 0, tzinfo=TZ), path=late_path)
-        late = garden.plant_crop(
+        garden.plant_crop(
             "小番茄", "1", now=datetime(2026, 7, 10, 23, 55, tzinfo=TZ), path=late_path,
         )
-        # 23:55 种下，当天只剩5分钟，这笔账应接近0但仍大于0。
-        self.assertGreater(late["growth_points"], 0.0)
-        self.assertLess(late["growth_points"], 0.01)
-        self.assertGreater(early["growth_points"], late["growth_points"])
+        # 23:55 种下，到 23:59 只过了4分钟，累积应接近0但仍大于0。
+        late_check = garden.crop_snapshot(
+            now=datetime(2026, 7, 10, 23, 59, tzinfo=TZ), path=late_path,
+        )["plots"][0]
+        self.assertGreater(late_check["growth_points"], 0.0)
+        self.assertLess(late_check["growth_points"], 0.01)
+        self.assertGreater(early_late_check["growth_points"], late_check["growth_points"])
 
     def test_water_bonus_is_once_per_beijing_day_and_midnight_resets(self):
         self._plant_tomato()
@@ -1753,9 +1759,12 @@ class CropSystemTests(unittest.TestCase):
         self.assertFalse(first["repeated"])
         self.assertTrue(repeated["repeated"])
         self.assertFalse(after_midnight["repeated"])
-        # 种下当天先记0.55点账 + 7/10当天0.25浇水加成 + 7/11整天1.1点
-        # 生长记账 + 7/11当天0.25浇水加成 = 2.15。
-        self.assertEqual(after_midnight["plot"]["growth_points"], 2.15)
+        # 线性记账：7/10 正午种下，到 7/11 00:01 自然累积了约半天多一分钟
+        # 的生长（1.1/天），加上 7/10、7/11 各一次 0.25 浇水加成。
+        natural = 1.1 * ((12 * 3600 + 60) / 86400.0)
+        self.assertAlmostEqual(
+            after_midnight["plot"]["growth_points"], natural + 0.25 + 0.25, places=3,
+        )
 
     def test_elapsed_days_are_settled_in_one_call_and_growth_ignores_a_season_change(self):
         # 换季只挡"能不能新种"；已经种下的这一茬不会被换季暂停生长，
@@ -1772,10 +1781,12 @@ class CropSystemTests(unittest.TestCase):
         # 但这一茬仍然正常长熟，不会被冻结在换季那一刻。
         crossed = garden.crop_snapshot(now=datetime(2026, 5, 8, 12, tzinfo=TZ), path=self.path)["plots"][0]
         self.assertEqual(crossed["status"], "ready")
-        # 种下当天（5/4 正午）剩余12小时按比例先记了0.55点账，见 plant_crop。
-        self.assertEqual(crossed["growth_points"], 4.65)
+        # 线性记账：5/4 正午种下，5/4 后半天+5/5 整天按春季 term 加成
+        # 1.1/天，跨入夏季后 5/6、5/7 整天与 5/8 前半天按 1.0/天，
+        # 0.55+1.1+1.0+1.0+0.5=4.15，且 5/8 清晨就已跨过 4.0 成熟线。
+        self.assertEqual(crossed["growth_points"], 4.15)
         later = garden.crop_snapshot(now=datetime(2026, 7, 20, 12, tzinfo=TZ), path=self.path)["plots"][0]
-        self.assertEqual((later["status"], later["growth_points"]), ("ready", 4.65))
+        self.assertEqual((later["status"], later["growth_points"]), ("ready", 4.15))
 
     def test_harvest_returns_seed_and_blocks_repeat(self):
         self._plant_tomato()
@@ -2030,7 +2041,10 @@ class CropSystemTests(unittest.TestCase):
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(raw["pending_events"], [])
         self.assertEqual(raw["meta"].get("completed_crop_cycles", []), [])
-        self.assertIsNone(garden.run_tick(self.summer + timedelta(days=5), rng=_StubRng([0.0]), path=self.path))
+        # 本用例真正要守住的是：被取消掉的旧 crop_stage 事件不会死灰复燃。
+        # 收获后地块空置，没有别的事件可触发，下一轮 tick 应该什么都不出。
+        after = garden.run_tick(self.summer + timedelta(days=5), rng=_StubRng([0.0]), path=self.path)
+        self.assertIsNone(after)
 
     def test_harvest_after_all_stage_events_confirmed_leaves_no_archive(self):
         self._plant_tomato()
@@ -2124,8 +2138,9 @@ class CropSystemTests(unittest.TestCase):
         garden.crop_snapshot(now=planted_at, path=self.path)
         garden.plant_crop("小番茄", "1", now=planted_at, path=self.path)
         plot = garden.crop_snapshot(now=datetime(2026, 7, 24, 12, tzinfo=TZ), path=self.path)["plots"][0]
-        # 种下当天（7/22 正午）剩余12小时按比例先记了0.55点账，见 plant_crop。
-        self.assertEqual(plot["growth_points"], 2.75)
+        # 线性记账：7/22 正午到 7/24 正午恰好两个整天，大暑 term 加成
+        # 1.1/天 × 2 = 2.2。
+        self.assertEqual(plot["growth_points"], 2.2)
 
 
 class FindPlotNoCandidateMessageTests(unittest.TestCase):

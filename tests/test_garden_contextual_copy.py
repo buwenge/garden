@@ -208,7 +208,7 @@ class ContextualCatalogTests(unittest.TestCase):
             self.assertNotIn("不能吃", text)
             self.assertNotIn("烧焦", text)
         for text in garden_content.GARDEN_ACTION_TEXT["gift"]:
-            self.assertIn("user", text)
+            self.assertIn("宝宝", text)
             self.assertTrue(any(word in text for word in ("院子", "手账")))
 
     def test_runtime_writer_conflict_falls_back_without_persisting_bad_copy(self):

@@ -27,6 +27,8 @@ class GardenWebSecurityTests(unittest.TestCase):
         self.assertIn('HOST = os.environ.get("GARDEN_WEB_HOST", "127.0.0.1")', server)
         self.assertNotIn("def _auth_token", server)
         self.assertNotIn("def _authorized", server)
+        readme = (ROOT / "garden-web/README.md").read_text(encoding="utf-8")
+        self.assertIn("auth_request", readme)
         nginx = (ROOT / "garden-web/nginx-location.conf.example").read_text(
             encoding="utf-8",
         )
