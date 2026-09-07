@@ -778,7 +778,7 @@ function openCoopSheet() {
     desc += ` 鸡粪×${manureUnits}/${manureCap}${manureUnits >= manureCap ? "（攒满了）" : ""}。`;
   }
   (c.compost_batches || []).forEach(batch => {
-    desc += ` 堆肥角：${batch.units}份发酵中，约剩 ${fmtLeft(batch.remaining_seconds)}。`;
+    desc += ` 堆肥角：鸡粪×${batch.manure_units || 0}发酵中，约剩 ${fmtLeft(batch.remaining_seconds)}，出肥料×${batch.units}。`;
   });
   if (c.story_status === "hatched" && (c.hatchable_egg_count || 0) > 0) {
     actions.push({ label: "孵一枚可孵化鸡蛋", cls: "warm", onClick: () => doAction("可孵化鸡蛋 孵化", "把一枚稀有蛋拢进软窝…") });
@@ -941,6 +941,7 @@ function openPlotSheet(p, n) {
   if (p.moisture != null) rows += `<div class="sp-row">土壤${p.moisture_label}（${p.moisture}）· ${p.advice}</div><div class="moisture"><i style="width:${Math.min(100, p.moisture)}%"></i></div>`;
   if (p.ready_in_seconds != null && p.status === "growing") rows += `<div class="sp-row">约 ${fmtLeft(p.ready_in_seconds)} 后成熟 · 基础成熟期 ${p.base_days} 天</div>`;
   if (p.growth_note) rows += `<div class="sp-row">${p.growth_note}</div>`;
+  if (p.status === "growing" && p.fertilize_count != null) rows += `<div class="sp-row">追肥 ${p.fertilize_count}/${p.fertilize_max}</div>`;
 
   const actions = [];
   if (p.status === "withered") {

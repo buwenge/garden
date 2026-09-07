@@ -86,6 +86,8 @@ def _plot_payload(plot: dict, now: datetime, real_env: bool) -> dict:
         "growth_note": None,
         "condition": None,
         "quality": None,
+        "fertilize_count": None,
+        "fertilize_max": None,
     }
     if plot.get("status") == "empty" or not plot.get("crop_id"):
         return payload
@@ -120,6 +122,10 @@ def _plot_payload(plot: dict, now: datetime, real_env: bool) -> dict:
         except Exception:
             note = None
         payload["growth_note"] = note
+        # 第九版：追肥次数只在 growing 有意义（跟品质标记同一条规则）；
+        # 上限也一并传给前端，不在 index.html 里硬编码 5。
+        payload["fertilize_count"] = int(plot.get("fertilize_count", 0))
+        payload["fertilize_max"] = garden.FERTILIZE_MAX_PER_CYCLE
     soil = plot.get("soil")
     if real_env and isinstance(soil, dict):
         moisture = float(soil.get("moisture", 0))

@@ -864,6 +864,72 @@ class HandleGardenTests(unittest.TestCase):
             home.handle_garden(self._request(["院子", "浇水", "1"]))
         self.assertIn(crop_name, home.handle_garden(self._request(["院子", "浇水", "p1"])))
 
+    def test_coop_clean_result_line_reports_fertilizer_yield(self):
+        """第九版：打扫鸡舍结果行报"约三天沤出肥料×N"（六份鸡粪沤三天出
+        一份肥料），不是旧版"两天发酵好"的口径。"""
+        now = datetime.now(TZ)
+        garden.crop_snapshot(now=now)
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw["coop"].update({
+            "built": True,
+            "built_at": now.isoformat(),
+            "story_status": "incubating",
+            "clutch_id": "clutch-test",
+            "incubation_started_at": now.isoformat(),
+            "hatch_at": (now + garden.COOP_INCUBATION_DURATION).isoformat(),
+            "incubating_egg_count": garden.COOP_EGG_COUNT,
+            "manure": {"units": 6, "last_settled_at": now.isoformat()},
+        })
+        self.path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+        with patch("home.random.choice", side_effect=lambda lines: lines[0]):
+            output = home.handle_garden(self._request(["院子", "打扫鸡舍"]))
+        self.assertIn("约三天沤出肥料×1", output)
+
+    def test_fertilize_growth_boost_result_line_reports_progress_and_estimate(self):
+        """第九版：追肥结果行报"已追肥 n/5 次，预计…熟"（非催熟分支）。"""
+        now = datetime.now(TZ)
+        crop_id, crop_name = self._seasonal_crop()
+        garden.crop_snapshot(now=now)
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw["inventory"]["seeds"][crop_id] = raw["inventory"]["seeds"].get(crop_id, 0) + 1
+        raw["inventory"]["fertilizer"] = {"fertilizer": 1}
+        self.path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+        garden.plant_crop(crop_name, "1", now=now)
+
+        with patch("home.random.choice", side_effect=lambda lines: lines[0]):
+            output = home.handle_garden(self._request(["院子", "施肥", "1"]))
+        self.assertIn(f"{crop_name}这茬已追肥1/5次，预计", output)
+        self.assertIn("熟。", output)
+
+    def test_fertilize_growth_boost_ripened_branch_reports_ready_to_harvest(self):
+        """第九版：剩余生长时间很小时追肥能直接催熟，结果行改成"这一下
+        直接催熟了，可以收获"，不报次数/预计时刻。"""
+        now = datetime.now(TZ)
+        crop_id, crop_name = self._seasonal_crop()
+        growth_days = garden.garden_crops.CROPS[crop_id]["growth_days"]
+        garden.crop_snapshot(now=now)
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw["inventory"]["seeds"][crop_id] = raw["inventory"]["seeds"].get(crop_id, 0) + 1
+        raw["inventory"]["fertilizer"] = {"fertilizer": 1}
+        self.path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+        garden.plant_crop(crop_name, "1", now=now)
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        plot = next(p for p in raw["plots"] if p["plot_id"] == "p1")
+        # 剩最后一丁点生长点数，施肥的一成加成足够把它推过成熟线（见
+        # garden.py 追肥分支：bonus = (target-growth_points)*0.10）。
+        # last_settled_at 顺手拨到未来一小时：handle_garden 内部用真实
+        # datetime.now() 结算，不这样拨的话，从写盘到真正调用施肥之间
+        # 流逝的哪怕几毫秒真实时间，也可能先把这点残余生长量自然结算掉，
+        # 让"催熟"变成"结算已经熟了"，不是"这次施肥催熟的"。
+        plot["growth_points"] = growth_days - 0.00001
+        plot["last_settled_at"] = (now + timedelta(hours=1)).isoformat()
+        self.path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+        with patch("home.random.choice", side_effect=lambda lines: lines[0]):
+            output = home.handle_garden(self._request(["院子", "施肥", "1"]))
+        self.assertIn(f"{crop_name}这一下直接催熟了，可以收获。", output)
+
 
 if __name__ == "__main__":
     unittest.main()

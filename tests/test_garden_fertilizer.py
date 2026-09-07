@@ -14,6 +14,7 @@
 
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -196,29 +197,56 @@ class CoopCleanTests(_FileTestCase):
                 _adult_chick("hen-2", sex="hen", now=self.now, profile_index=1),
             ],
         )
-        state["coop"]["manure"] = {"units": 4, "last_settled_at": self.now.isoformat()}
+        state["coop"]["manure"] = {"units": 6, "last_settled_at": self.now.isoformat()}
         self._write(state)
 
         result = garden.care_chicken(None, "clean", now=self.now, path=self.path)
-        self.assertEqual(result["units"], 4)
+        self.assertEqual(result["units"], 6)
+        self.assertEqual(result["fertilizer_units"], 1)
 
         raw = self._raw()
         self.assertEqual(raw["coop"]["manure"]["units"], 0)
         batches = raw["compost"]["batches"]
         self.assertEqual(len(batches), 1)
-        self.assertEqual(batches[0]["units"], 4)
+        self.assertEqual(batches[0]["units"], 1)
+        self.assertEqual(batches[0]["manure_units"], 6)
         ready_at = datetime.fromisoformat(batches[0]["ready_at"])
         self.assertEqual(ready_at, self.now + garden.COMPOST_READY_AFTER)
 
-    def test_clean_coop_with_no_manure_does_not_create_empty_batch(self):
+    def test_clean_coop_with_insufficient_manure_raises_and_changes_nothing(self):
+        """攒不够 6 份打扫报错，鸡粪数与堆肥角都不变；结算好的时间账（这里
+        是 last_settled_at 游标）照旧落盘（设计稿第九版第一节）。1 只成鸡
+        过 3 天恰好产 3 份（仍不够 6），用来同时验证"游标照旧推进"。"""
         state = _built_coop_state(self.now, chicks=[_adult_chick("hen-1", sex="hen", now=self.now)])
-        state["coop"]["manure"] = {"units": 0, "last_settled_at": self.now.isoformat()}
+        state["coop"]["manure"] = {"units": 0, "last_settled_at": (self.now - timedelta(days=3)).isoformat()}
         self._write(state)
 
-        result = garden.care_chicken(None, "clean", now=self.now, path=self.path)
-        self.assertEqual(result["units"], 0)
+        with self.assertRaisesRegex(garden.GardenError, r"鸡粪还没攒够一堆（3/6）"):
+            garden.care_chicken(None, "clean", now=self.now, path=self.path)
+
         raw = self._raw()
+        self.assertEqual(raw["coop"]["manure"]["units"], 3)
         self.assertEqual(raw["compost"]["batches"], [])
+        # 已结算的时间账（游标推进到 now）照旧落盘——拒绝分支不吞时间账。
+        self.assertEqual(
+            datetime.fromisoformat(raw["coop"]["manure"]["last_settled_at"]), self.now,
+        )
+
+    def test_clean_coop_cap_generalized_formula(self):
+        """上限通式：把 MANURE_CAP monkeypatch 成 8、鸡粪 8 份 → 收走 6、
+        留 2、出 1 份（设计稿第九版第一节：通式是为以后上限调高准备的）。"""
+        state = _built_coop_state(self.now, chicks=[_adult_chick("hen-1", sex="hen", now=self.now)])
+        state["coop"]["manure"] = {"units": 8, "last_settled_at": self.now.isoformat()}
+        self._write(state)
+
+        with patch.object(garden, "MANURE_CAP", 8):
+            result = garden.care_chicken(None, "clean", now=self.now, path=self.path)
+        self.assertEqual(result["units"], 6)
+        self.assertEqual(result["fertilizer_units"], 1)
+        raw = self._raw()
+        self.assertEqual(raw["coop"]["manure"]["units"], 2)
+        self.assertEqual(raw["compost"]["batches"][0]["manure_units"], 6)
+        self.assertEqual(raw["compost"]["batches"][0]["units"], 1)
 
     def test_clean_also_settles_matured_compost(self):
         """打扫走 _settle_coop_byproducts 成对结算：堆肥角里已到期的批次当场
@@ -227,20 +255,21 @@ class CoopCleanTests(_FileTestCase):
         state = _built_coop_state(
             self.now, chicks=[_adult_chick("hen-1", sex="hen", now=self.now)],
         )
-        state["coop"]["manure"] = {"units": 2, "last_settled_at": self.now.isoformat()}
+        state["coop"]["manure"] = {"units": 6, "last_settled_at": self.now.isoformat()}
         state["compost"]["batches"] = [{
-            "batch_id": "b1", "units": 3,
+            "batch_id": "b1", "units": 3, "manure_units": 18,
             "ready_at": (self.now - timedelta(hours=1)).isoformat(),
         }]
         self._write(state)
 
         result = garden.care_chicken(None, "clean", now=self.now, path=self.path)
-        self.assertEqual(result["units"], 2)
+        self.assertEqual(result["units"], 6)
         raw = self._raw()
         self.assertEqual(raw["inventory"]["fertilizer"]["fertilizer"], 3)
         batches = raw["compost"]["batches"]
         self.assertEqual(len(batches), 1)
-        self.assertEqual(batches[0]["units"], 2)
+        self.assertEqual(batches[0]["units"], 1)
+        self.assertEqual(batches[0]["manure_units"], 6)
 
     def test_clean_coop_requires_built_coop(self):
         state = garden._empty_state()
@@ -273,7 +302,7 @@ class CompostSettlementTests(_FileTestCase):
         state = _empty_coop_plots_state(self.now)
         ready_at = self.now - timedelta(minutes=1)  # 已经到期
         state["compost"]["batches"] = [
-            {"batch_id": "batch-1", "units": 3, "ready_at": ready_at.isoformat()},
+            {"batch_id": "batch-1", "units": 3, "manure_units": 18, "ready_at": ready_at.isoformat()},
         ]
         self._write(state)
 
@@ -295,7 +324,7 @@ class CompostSettlementTests(_FileTestCase):
         state = _empty_coop_plots_state(self.now)
         ready_at = self.now + timedelta(hours=1)  # 还没到期
         state["compost"]["batches"] = [
-            {"batch_id": "batch-2", "units": 2, "ready_at": ready_at.isoformat()},
+            {"batch_id": "batch-2", "units": 2, "manure_units": 12, "ready_at": ready_at.isoformat()},
         ]
         self._write(state)
 
@@ -307,6 +336,36 @@ class CompostSettlementTests(_FileTestCase):
         self.assertFalse(
             any(e.get("type") == "compost_ready" for e in raw["pending_events"]),
         )
+
+    def test_clean_then_72h_boundary_matures_exactly_one_fertilizer(self):
+        """端到端：打扫攒出一批（units=1, manure_units=6），72 小时前不入
+        库，恰好 72 小时到期入库肥料×1，事件只排一条（设计稿第九版第一节）。"""
+        state = _built_coop_state(self.now, chicks=[_adult_chick("hen-1", sex="hen", now=self.now)])
+        state["coop"]["manure"] = {"units": 6, "last_settled_at": self.now.isoformat()}
+        self._write(state)
+
+        result = garden.care_chicken(None, "clean", now=self.now, path=self.path)
+        self.assertEqual(result["fertilizer_units"], 1)
+        batch = self._raw()["compost"]["batches"][0]
+        self.assertEqual(batch["units"], 1)
+        self.assertEqual(batch["manure_units"], 6)
+        ready_at = datetime.fromisoformat(batch["ready_at"])
+        self.assertEqual(ready_at, self.now + garden.COMPOST_READY_AFTER)
+
+        just_before = ready_at - timedelta(seconds=1)
+        garden.crop_snapshot(now=just_before, path=self.path)
+        raw = self._raw()
+        self.assertEqual(len(raw["compost"]["batches"]), 1)
+        self.assertEqual(raw["inventory"]["fertilizer"].get("fertilizer", 0), 0)
+
+        garden.crop_snapshot(now=ready_at, path=self.path)
+        garden.crop_snapshot(now=ready_at, path=self.path)  # 撞见两次，事件只排一条
+        raw = self._raw()
+        self.assertEqual(raw["compost"]["batches"], [])
+        self.assertEqual(raw["inventory"]["fertilizer"]["fertilizer"], 1)
+        compost_events = [e for e in raw["pending_events"] if e.get("type") == "compost_ready"]
+        self.assertEqual(len(compost_events), 1)
+        self.assertEqual(compost_events[0]["units"], 1)
 
 
 # ───────────────────────── 施肥：治缺肥 ─────────────────────────
@@ -360,12 +419,12 @@ class FertilizeConditionTests(_FileTestCase):
 
 
 class FertilizeQualityRescueTests(_FileTestCase):
-    def _migrate_to_v5_growing_plot(self):
+    def _migrate_to_v5_growing_plot(self, *, status="growing", stage="growing"):
         state = garden._empty_state()
         state.pop("entries")
         state["plots"] = [garden._empty_plot(pid) for pid in garden._PLOT_IDS]
         state["meta"]["crop_seed_box_initialized"] = True
-        state["plots"][0] = _growing_plot("p1", now=self.now)
+        state["plots"][0] = _growing_plot("p1", now=self.now, status=status, stage=stage)
         self._write(state)
         with patch.dict(os.environ, {"GARDEN_REAL_ENVIRONMENT_ENABLED": "1"}):
             garden.crop_snapshot(now=self.now, path=self.path)
@@ -422,7 +481,9 @@ class FertilizeQualityRescueTests(_FileTestCase):
         )
 
     def test_condition_caused_poor_quality_is_not_rescuable_and_spends_no_fertilizer(self):
-        self._migrate_to_v5_growing_plot()
+        """第九版起，"品相已定、肥料救不回"只剩 ready 的地会走到（growing
+        的地即便欠佳也会被第九版追肥分支接住，见下面的追肥同款测试）。"""
+        self._migrate_to_v5_growing_plot(status="ready", stage="ready")
         self._set_plot_quality(quality="poor", quality_cause="condition", flood_since=None)
         before = self._raw()
 
@@ -440,8 +501,9 @@ class FertilizeQualityRescueTests(_FileTestCase):
 
     def test_legacy_poor_quality_without_cause_is_not_rescuable(self):
         """存量旧档没有 quality_cause 字段 → 读出来是 None，按人祸口径处理
-        （不可救），不是"因为没记录成因就默认可救"（设计稿第一节第2点）。"""
-        self._migrate_to_v5_growing_plot()
+        （不可救），不是"因为没记录成因就默认可救"（设计稿第一节第2点）。
+        第九版起这条也只在 ready 的地上成立（growing 的地会走追肥分支）。"""
+        self._migrate_to_v5_growing_plot(status="ready", stage="ready")
         raw = self._raw()
         raw["plots"][0]["quality"] = "poor"
         raw["plots"][0].pop("quality_cause", None)  # 模拟真正的旧档：字段整个不存在
@@ -458,10 +520,29 @@ class FertilizeQualityRescueTests(_FileTestCase):
             after["inventory"]["fertilizer"], before["inventory"]["fertilizer"],
         )
 
+    def test_growing_poor_quality_non_flood_gets_growth_boost_not_unrecoverable(self):
+        """第九版：品相欠佳但仍在 growing 的地，追肥走的是第九版新增的
+        growth_boost 分支（肥料催长跟品相无关），不再被判"救不回"；quality/
+        quality_cause 原样保留，不暗示品相变化（设计稿第九版第二节第4点）。"""
+        self._migrate_to_v5_growing_plot(status="growing", stage="growing")
+        self._set_plot_quality(quality="poor", quality_cause="condition", flood_since=None)
+
+        with patch.dict(os.environ, {"GARDEN_REAL_ENVIRONMENT_ENABLED": "1"}):
+            result = garden.fertilize_plot("p1", now=self.now, path=self.path)
+        self.assertEqual(result["kind"], "growth_boost")
+
+        after = self._raw()
+        self.assertEqual(after["plots"][0]["quality"], "poor")
+        self.assertEqual(after["plots"][0]["quality_cause"], "condition")
+        self.assertEqual(after["plots"][0]["fertilize_count"], 1)
+        self.assertEqual(after["inventory"]["fertilizer"]["fertilizer"], 1)
+
     def test_selectorless_fertilize_targets_the_only_rescuable_plot(self):
-        """院子里多块地健康、只有一块内涝欠佳时，不带编号的"施肥"应当自动
+        """院子里多块地、只有一块内涝欠佳可救时，不带编号的"施肥"应当自动
         选中那块可救的地，而不是报"不止一个可处理菜畦"——code-review 实锤：
-        第一版收窄谓词只认 active 异常，救品质路径在多作物院子里永远选不中。"""
+        第一版收窄谓词只认 active 异常，救品质路径在多作物院子里永远选不中。
+        第九版起 growing 且还能追肥的地也算 relevant，这里让 p2 已经追满
+        5 次、不再是候选，保证场景仍然只剩 p1 一块可处理。"""
         state = garden._empty_state()
         state.pop("entries")
         state["plots"] = [garden._empty_plot(pid) for pid in garden._PLOT_IDS]
@@ -470,6 +551,7 @@ class FertilizeQualityRescueTests(_FileTestCase):
         state["plots"][1] = _growing_plot("p2", now=self.now)
         state["plots"][0]["quality"] = "poor"
         state["plots"][0]["quality_cause"] = "flood"
+        state["plots"][1]["fertilize_count"] = garden.FERTILIZE_MAX_PER_CYCLE
         state["inventory"]["fertilizer"] = {"fertilizer": 1}
         self._write(state)
 
@@ -482,7 +564,9 @@ class FertilizeQualityRescueTests(_FileTestCase):
         self.assertEqual(raw["inventory"]["fertilizer"].get("fertilizer", 0), 0)
 
     def test_plot_with_no_issue_is_rejected_and_spends_no_fertilizer(self):
-        self._migrate_to_v5_growing_plot()
+        """健康的地施肥报"用不上"——第九版起这条只对 ready（或 withered）
+        的地成立，growing 的健康地已经改道追肥（见下面的追肥测试）。"""
+        self._migrate_to_v5_growing_plot(status="ready", stage="ready")
         raw = self._raw()
         raw["inventory"]["fertilizer"] = {"fertilizer": 2}
         self.path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -568,6 +652,169 @@ class FertilizeOtherConditionTests(_FileTestCase):
         )
 
 
+# ───────────────────────── 施肥：追肥（第九版新增） ─────────────────────────
+
+
+class FertilizeGrowthBoostTests(_FileTestCase):
+    def _state_with_growing_plot(self, *, growth_points=1.0, fertilize_count=0, fertilizer=10):
+        state = garden._empty_state()
+        state.pop("entries")
+        state["plots"] = [garden._empty_plot(pid) for pid in garden._PLOT_IDS]
+        state["meta"]["crop_seed_box_initialized"] = True
+        plot = _growing_plot("p1", now=self.now, growth_points=growth_points)
+        plot["fertilize_count"] = fertilize_count
+        state["plots"][0] = plot
+        state["inventory"]["fertilizer"] = {"fertilizer": fertilizer}
+        return state
+
+    def test_growth_boost_advances_growth_points_and_count(self):
+        """tomato growth_days=4：growth_points=1.0 施肥后剩余 3.0 的一成，
+        变成 1.3；fertilize_count==1；肥料减 1（设计稿第九版第一节）。"""
+        state = self._state_with_growing_plot(growth_points=1.0, fertilizer=2)
+        self._write(state)
+
+        result = garden.fertilize_plot("p1", now=self.now, path=self.path)
+        self.assertEqual(result["kind"], "growth_boost")
+        self.assertEqual(result["fertilize_count"], 1)
+        self.assertEqual(result["remaining_uses"], 4)
+        self.assertFalse(result["ripened"])
+
+        raw = self._raw()
+        self.assertEqual(raw["plots"][0]["growth_points"], 1.3)
+        self.assertEqual(raw["plots"][0]["fertilize_count"], 1)
+        self.assertEqual(raw["inventory"]["fertilizer"]["fertilizer"], 1)
+
+    def test_growth_boost_caps_at_five_uses_per_cycle(self):
+        state = self._state_with_growing_plot(growth_points=1.0, fertilizer=10)
+        self._write(state)
+
+        for expected_count in range(1, 6):
+            result = garden.fertilize_plot("p1", now=self.now, path=self.path)
+            self.assertEqual(result["kind"], "growth_boost")
+            self.assertEqual(result["fertilize_count"], expected_count)
+
+        before = self._raw()
+        with self.assertRaisesRegex(garden.GardenError, "已经追过 5 次肥"):
+            garden.fertilize_plot("p1", now=self.now, path=self.path)
+        after = self._raw()
+        # 拒绝分支不扣肥料、不改 growth_points/fertilize_count。
+        self.assertEqual(after["inventory"]["fertilizer"], before["inventory"]["fertilizer"])
+        self.assertEqual(after["plots"][0]["growth_points"], before["plots"][0]["growth_points"])
+        self.assertEqual(after["plots"][0]["fertilize_count"], 5)
+
+    def test_growth_boost_can_ripen_crop_directly(self):
+        """剩余生长时间很小时施肥能直接推到成熟：status 变 ready、ready_at
+        非空、返回 ripened=True（设计稿第九版第二节第4点）。"""
+        state = self._state_with_growing_plot(growth_points=3.99999, fertilizer=1)
+        self._write(state)
+
+        result = garden.fertilize_plot("p1", now=self.now, path=self.path)
+        self.assertTrue(result["ripened"])
+        self.assertIsNone(result["estimated_ready_at"])
+
+        raw = self._raw()
+        self.assertEqual(raw["plots"][0]["status"], "ready")
+        self.assertIsNotNone(raw["plots"][0]["ready_at"])
+
+    def test_ready_plot_fertilize_rejected_as_unusable(self):
+        state = garden._empty_state()
+        state.pop("entries")
+        state["plots"] = [garden._empty_plot(pid) for pid in garden._PLOT_IDS]
+        state["meta"]["crop_seed_box_initialized"] = True
+        state["plots"][0] = _growing_plot("p1", now=self.now, status="ready", stage="ready")
+        state["inventory"]["fertilizer"] = {"fertilizer": 2}
+        self._write(state)
+        before = self._raw()
+
+        with self.assertRaisesRegex(garden.GardenError, "用不上肥料"):
+            garden.fertilize_plot("p1", now=self.now, path=self.path)
+        after = self._raw()
+        self.assertEqual(after["inventory"]["fertilizer"], before["inventory"]["fertilizer"])
+
+    def test_withered_plot_fertilize_rejected_as_unusable(self):
+        """withered 的地施肥同 ready：报"用不上"，不扣肥料（设计稿第九版
+        第二节第6点）。经由自然异常状态机走到 withered，跟
+        test_garden_conditions.py 的既有写法一致。"""
+        state = garden._empty_state()
+        state.pop("entries")
+        state["plots"] = [garden._empty_plot(pid) for pid in garden._PLOT_IDS]
+        state["meta"]["crop_seed_box_initialized"] = True
+        plot = _growing_plot("p1", now=self.now)
+        state["plots"][0] = plot
+        garden._create_crop_condition(state, plot, "pest", self.now, announced=True)
+        state["inventory"]["fertilizer"] = {"fertilizer": 2}
+        self._write(state)
+        # 36 小时后异常升级成枯死（跟 test_garden_conditions.py 的既有断点一致）。
+        garden.crop_snapshot(now=self.now + timedelta(hours=36), path=self.path)
+        raw = self._raw()
+        self.assertEqual(raw["plots"][0]["status"], "withered")
+        before = self._raw()
+
+        with self.assertRaisesRegex(garden.GardenError, "用不上肥料"):
+            garden.fertilize_plot("p1", now=self.now + timedelta(hours=36), path=self.path)
+        after = self._raw()
+        self.assertEqual(after["inventory"]["fertilizer"], before["inventory"]["fertilizer"])
+
+    def test_sow_resets_fertilize_count_to_zero(self):
+        state = garden._empty_state()
+        state.pop("entries")
+        state["plots"] = [garden._empty_plot(pid) for pid in garden._PLOT_IDS]
+        state["meta"]["crop_seed_box_initialized"] = True
+        state["inventory"]["seeds"] = {"tomato": 1}
+        self._write(state)
+
+        # tomato 只在夏季能种；self.now（8/20）已经入秋，这里换一个仍是
+        # 夏季的时刻来播种，跟结算时钟无关。
+        summer_now = datetime(2026, 7, 10, 12, 0, tzinfo=TZ)
+        snapshot = garden.plant_crop("tomato", "p1", now=summer_now, path=self.path)
+        self.assertEqual(snapshot["fertilize_count"], 0)
+        raw = self._raw()
+        self.assertEqual(raw["plots"][0]["fertilize_count"], 0)
+
+    def test_legacy_plot_without_fertilize_count_field_reads_as_zero(self):
+        """旧档没有 fertilize_count 字段 → plot.get() 缺省即 0，跟
+        quality_cause 一个路数，不需要专门迁移（设计稿第九版第一节）。"""
+        state = garden._empty_state()
+        state.pop("entries")
+        state["plots"] = [garden._empty_plot(pid) for pid in garden._PLOT_IDS]
+        state["meta"]["crop_seed_box_initialized"] = True
+        plot = _growing_plot("p1", now=self.now)
+        plot.pop("fertilize_count", None)  # 模拟真正的旧档：字段整个不存在
+        state["plots"][0] = plot
+        self._write(state)
+
+        reloaded = garden._read_state_unlocked(self.path, now=self.now)
+        self.assertNotIn("fertilize_count", json.loads(self.path.read_text(encoding="utf-8"))["plots"][0])
+        self.assertEqual(int(reloaded["plots"][0].get("fertilize_count", 0)), 0)
+
+    def test_selectorless_fertilize_auto_selects_the_only_growing_plot(self):
+        state = garden._empty_state()
+        state.pop("entries")
+        state["plots"] = [garden._empty_plot(pid) for pid in garden._PLOT_IDS]
+        state["meta"]["crop_seed_box_initialized"] = True
+        state["plots"][0] = _growing_plot("p1", now=self.now)
+        # 其余地块保持 empty（默认），院子里只有一块 growing。
+        state["inventory"]["fertilizer"] = {"fertilizer": 1}
+        self._write(state)
+
+        result = garden.fertilize_plot(None, now=self.now, path=self.path)
+        self.assertEqual(result["kind"], "growth_boost")
+        self.assertEqual(result["plot_id"], "p1")
+
+    def test_selectorless_fertilize_with_two_growing_plots_requires_selector(self):
+        state = garden._empty_state()
+        state.pop("entries")
+        state["plots"] = [garden._empty_plot(pid) for pid in garden._PLOT_IDS]
+        state["meta"]["crop_seed_box_initialized"] = True
+        state["plots"][0] = _growing_plot("p1", now=self.now)
+        state["plots"][1] = _growing_plot("p2", now=self.now)
+        state["inventory"]["fertilizer"] = {"fertilizer": 2}
+        self._write(state)
+
+        with self.assertRaisesRegex(garden.GardenError, "带上地块编号"):
+            garden.fertilize_plot(None, now=self.now, path=self.path)
+
+
 # ───────── 监理复核补测：打扫鸡舍的语义路由（home 侧确定性收窄） ─────────
 
 
@@ -606,12 +853,16 @@ class PersistenceRoundTripTests(_FileTestCase):
         state = _built_coop_state(self.now, chicks=[_adult_chick("hen-1", sex="hen", now=self.now)])
         state["coop"]["manure"] = {"units": 3, "last_settled_at": self.now.isoformat()}
         state["compost"]["batches"] = [
-            {"batch_id": "batch-x", "units": 2, "ready_at": (self.now + timedelta(hours=10)).isoformat()},
+            {
+                "batch_id": "batch-x", "units": 2, "manure_units": 12,
+                "ready_at": (self.now + timedelta(hours=10)).isoformat(),
+            },
         ]
         state["inventory"]["fertilizer"]["fertilizer"] = 5
         plot = _growing_plot("p1", now=self.now)
         plot["quality"] = "poor"
         plot["quality_cause"] = "flood"
+        plot["fertilize_count"] = 2
         state["plots"][0] = plot
         self._write(state)
 
@@ -619,9 +870,11 @@ class PersistenceRoundTripTests(_FileTestCase):
         self.assertEqual(reloaded["coop"]["manure"], {"units": 3, "last_settled_at": self.now.isoformat()})
         self.assertEqual(len(reloaded["compost"]["batches"]), 1)
         self.assertEqual(reloaded["compost"]["batches"][0]["units"], 2)
+        self.assertEqual(reloaded["compost"]["batches"][0]["manure_units"], 12)
         self.assertEqual(reloaded["inventory"]["fertilizer"]["fertilizer"], 5)
         self.assertEqual(reloaded["plots"][0]["quality"], "poor")
         self.assertEqual(reloaded["plots"][0]["quality_cause"], "flood")
+        self.assertEqual(reloaded["plots"][0]["fertilize_count"], 2)
 
         # 再走一次完整写回，确认二次落盘同样不丢（防止只有内存态正确、
         # 落盘反而漏字段的假象）。
@@ -629,7 +882,9 @@ class PersistenceRoundTripTests(_FileTestCase):
         twice_reloaded = garden._read_state_unlocked(self.path, now=self.now)
         self.assertEqual(twice_reloaded["coop"]["manure"]["units"], 3)
         self.assertEqual(len(twice_reloaded["compost"]["batches"]), 1)
+        self.assertEqual(twice_reloaded["compost"]["batches"][0]["manure_units"], 12)
         self.assertEqual(twice_reloaded["inventory"]["fertilizer"]["fertilizer"], 5)
+        self.assertEqual(twice_reloaded["plots"][0]["fertilize_count"], 2)
         self.assertEqual(twice_reloaded["plots"][0]["quality_cause"], "flood")
 
 
@@ -670,6 +925,80 @@ class MigrationIdempotenceTests(_FileTestCase):
         self.assertEqual(
             [c["id"] for c in after_second_settle["coop"]["chicks"]], ["hen-1"],
         )
+
+    def test_legacy_compost_batch_migrates_units_semantics_and_is_idempotent(self):
+        """旧批次按第八版口径记"units=鸡粪份数"；第九版读出时要迁移成
+        "units=将来出的肥料份数"，manure_units 留痕收走的鸡粪份数，ready_at
+        不追溯延长（设计稿第九版第一节）。生产当前正好有一批 units=6 在
+        发酵，迁移后应变成 manure_units=6, units=1。"""
+        state = _empty_coop_plots_state(self.now)
+        ready_at_a = self.now + timedelta(hours=10)
+        ready_at_b = self.now + timedelta(hours=20)
+        state["compost"]["batches"] = [
+            {"batch_id": "batch-a", "units": 6, "ready_at": ready_at_a.isoformat()},
+            {"batch_id": "batch-b", "units": 3, "ready_at": ready_at_b.isoformat()},
+        ]
+        self._write(state)
+
+        first = garden._read_state_unlocked(self.path, now=self.now)
+        batches = {b["batch_id"]: b for b in first["compost"]["batches"]}
+        self.assertEqual(batches["batch-a"]["manure_units"], 6)
+        self.assertEqual(batches["batch-a"]["units"], 1)
+        self.assertEqual(batches["batch-b"]["manure_units"], 3)
+        self.assertEqual(batches["batch-b"]["units"], 1)  # max(1, 3 // 6)
+        # ready_at 不追溯延长，仍是旧档当时写的到期时刻。
+        self.assertEqual(
+            datetime.fromisoformat(batches["batch-a"]["ready_at"]), ready_at_a,
+        )
+
+        # 幂等：落盘再读一次，字段原样不变（不会被再"迁移"一次）。
+        garden._write_state_unlocked(first, self.path)
+        second = garden._read_state_unlocked(self.path, now=self.now)
+        self.assertEqual(first["compost"], second["compost"])
+
+
+class GardenJsonReadOnlySmokeTests(unittest.TestCase):
+    """把仓库自带的 garden.json 样例只读副本拷到 tmp 目录跑一遍读取/打扫/
+    施肥，只用来确认第九版改动不会让真实形状的存档在校验环节报错——绝不
+    碰仓库自带样例文件本体（设计稿第九版第四节第11点，公开仓库同步时改
+    用仓库自带样例，不引用生产路径）。样例文件不存在或不可读时跳过。"""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.path = Path(self.tempdir.name) / "garden.json"
+
+    def test_sample_snapshot_reads_and_settles_without_validation_errors(self):
+        sample_path = Path(__file__).resolve().parent.parent / "garden.json"
+        if not sample_path.exists():
+            self.skipTest("仓库自带 garden.json 样例不存在，跳过只读冒烟测试")
+        mtime_before = sample_path.stat().st_mtime_ns
+        shutil.copy2(sample_path, self.path)
+        now = datetime.now(TZ)
+        try:
+            state = garden._read_state_unlocked(self.path, now=now)
+        except garden.GardenError as exc:
+            self.fail(f"样例存档只读副本读取时报了校验错误：{exc}")
+        # 打扫/施肥都走真实入口，只在这份只读副本的 tmp 路径上跑。
+        try:
+            garden.crop_snapshot(now=now, path=self.path)
+        except garden.GardenError:
+            pass  # 结算本身不该报错；如果报了会被下面的显式断言抓到。
+        if state["coop"].get("built"):
+            try:
+                garden.care_chicken(None, "clean", now=now, path=self.path)
+            except garden.GardenError:
+                pass  # 攒不够 6 份/鸡舍未建都是正常拒绝，不是校验损坏。
+        growing = next(
+            (p for p in state["plots"] if p.get("status") == "growing"), None,
+        )
+        if growing is not None:
+            try:
+                garden.fertilize_plot(growing["plot_id"], now=now, path=self.path)
+            except garden.GardenError:
+                pass  # 没肥料/追肥已到上限都是正常拒绝。
+        # 样例文件本体必须原封未动（mtime 不变，只操作 tmp 副本）。
+        self.assertEqual(sample_path.stat().st_mtime_ns, mtime_before)
 
 
 if __name__ == "__main__":

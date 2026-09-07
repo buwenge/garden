@@ -813,7 +813,7 @@ FLOOD_DAMAGE_EVENT_TEXT: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# 第八版：堆肥完成事件——48 小时发酵到期后排一条展示事件。event_id 由
+# 第八版：堆肥完成事件——第九版起 72 小时发酵到期后排一条展示事件。event_id 由
 # batch_id 派生天然幂等（同 FLOOD_DAMAGE_EVENT_TEXT 的写法）；这批带
 # {units} 槽位，_queue_compost_ready_event 在入队时就地 format 好，
 # 存进 pending_events 的 text 已经是成品，_validate_compost_ready_pending_event
@@ -3058,6 +3058,16 @@ GARDEN_ACTION_TEXT = {
         "看着{plot}地的{name}，这批的样子已经定型，施肥也救不回这一茬。",
         "{plot}地的{name}欠佳已成定局，肥料留在袋子里，这次用不上。",
         "在{plot}地的{name}前站了一会儿，终究没有施肥——这批品相已经改不了了。",
+    ),
+    # 第九版：追肥——只写拌肥/覆土/作物吃肥的画面，不写次数、不写时间、
+    # 不写品相，这些数字都由结果行报（设计稿第九版第三节）。
+    "fertilize_boost": (
+        "拌好的肥料撒进{plot}地的{name}根边，顺手把浮土轻轻覆了一层。",
+        "给{plot}地的{name}追了一次肥，肥料很快就被松软的土吃了进去。",
+        "肥料在{plot}地的{name}根部拌开，覆上一层土，等着它慢慢吸收。",
+        "蹲下来给{plot}地的{name}撒了把肥，又顺手拍实了周围的土。",
+        "{plot}地的{name}根边多了一圈新拌的肥料，覆土压得严严实实。",
+        "给{plot}地的{name}追肥、覆土，一气呵成，肥料很快渗进了土里。",
     ),
 }
 

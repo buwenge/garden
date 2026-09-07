@@ -113,9 +113,15 @@ NIGHT_START_HOUR = 2
 NIGHT_END_HOUR = 10
 # 第八版：施肥系统。鸡粪堆积上限——到上限后结算不再入账时间，直接把
 # last_settled_at 推到 now，防止"攒满不扫、一扫瞬间又满"的时间银行
-# （设计稿第一节）。堆肥固定发酵 48 小时，1 份鸡粪 = 1 份肥料。
+# （设计稿第一节）。第九版改口径：堆肥固定发酵 72 小时，6 份鸡粪沤成
+# 1 份肥料（设计稿第九版第一节）。
 MANURE_CAP = 6
-COMPOST_READY_AFTER = timedelta(hours=48)
+MANURE_PER_FERTILIZER = 6
+COMPOST_READY_AFTER = timedelta(hours=72)
+# 第九版：追肥——生长中、无异常的作物每次消耗肥料×1，把剩余生长时间
+# 砍掉一成；同一茬最多追 5 次（设计稿第九版第一节）。
+FERTILIZE_BOOST_RATIO = 0.10
+FERTILIZE_MAX_PER_CYCLE = 5
 # 菜畦接管种植后停止生成新的 v2 式观赏花草；已有旧花草仍完整保留、可查看和
 # 使用旧命令，不让旧入口继续绕过菜畦容量规则。
 LEGACY_FLOWER_SPAWN_ENABLED = False
@@ -244,8 +250,8 @@ def _empty_state() -> dict:
             "bond_milestones": [], "calendar_moments": [], "crop_incidents": [],
             "legacy_plants": [], "drainage": [], "fertilizer_rescues": [],
         },
-        # 第八版：堆肥角。打扫鸡舍生成一个批次，48 小时后发酵好自动转成
-        # 肥料入库（见 _settle_compost）。
+        # 第八版：堆肥角。打扫鸡舍生成一个批次，第九版起 72 小时后发酵好
+        # 自动转成肥料入库（见 _settle_compost）。
         "compost": {"batches": []},
         "pending_events": [],
         "meta": {
@@ -495,6 +501,9 @@ def _validate_compost(state: dict) -> None:
         units = batch.get("units")
         if isinstance(units, bool) or not isinstance(units, int) or units <= 0:
             raise GardenError("小院子堆肥批次份数损坏，已停止写入以免覆盖原记录")
+        manure_units = batch.get("manure_units")
+        if isinstance(manure_units, bool) or not isinstance(manure_units, int) or manure_units <= 0:
+            raise GardenError("小院子堆肥批次鸡粪份数损坏，已停止写入以免覆盖原记录")
         _parse_iso(batch.get("ready_at"), field="堆肥批次到期时间")
     if len(batch_ids) != len(set(batch_ids)):
         raise GardenError("小院子堆肥批次编号重复，已停止写入以免覆盖原记录")
@@ -739,6 +748,14 @@ def _validate_crop_state(state: dict) -> None:
             raise GardenError("小院子作物品质成因格式损坏，已停止写入以免覆盖原记录")
         if plot.get("quality") != "poor" and quality_cause is not None:
             raise GardenError("小院子作物品质成因与品质矛盾，已停止写入以免覆盖原记录")
+        # 第九版：追肥次数——存量旧档没有这个字段，plot.get() 缺省即 0，
+        # 天然落进"还没追过肥"，不需要专门迁移（跟 quality_cause 一个路数）。
+        fertilize_count = plot.get("fertilize_count", 0)
+        if (
+            isinstance(fertilize_count, bool) or not isinstance(fertilize_count, int)
+            or not 0 <= fertilize_count <= FERTILIZE_MAX_PER_CYCLE
+        ):
+            raise GardenError("小院子作物追肥次数损坏，已停止写入以免覆盖原记录")
         if plot.get("stage") not in _CROP_STAGE_ORDER or not isinstance(plot.get("growth_points"), (int, float)):
             raise GardenError("小院子作物记录格式损坏，已停止写入以免覆盖原记录")
         if (status == "ready") != (plot.get("stage") == "ready") or (
@@ -1413,6 +1430,22 @@ def _timing_multiplier_for_band(
     )
 
 
+def _current_timing_multiplier(plot: dict, now: datetime, observations: list[dict]) -> float:
+    """按当前土壤湿度带位算出的"当前条件持续不变"日生长倍率；没有现实
+    土壤数据时是中性的 1.0。`crop_timing` 的 current 倍率与追肥
+    （`fertilize_plot` 的 growth_boost 分支）投影预计成熟时刻共用同一份
+    计算，不各自抄一遍（CLAUDE.md"复制第二次就是抽共用的时机"）。"""
+    soil = plot.get("soil")
+    current_band = (
+        garden_weather.moisture_band(float(soil.get("moisture", 55.0)))
+        if isinstance(soil, dict) else None
+    )
+    return (
+        _timing_multiplier_for_band(plot, current_band, now, observations)
+        if current_band is not None else 1.0
+    )
+
+
 def _project_crop_ready_at(
     plot: dict,
     now: datetime,
@@ -1500,10 +1533,7 @@ def crop_timing(
         garden_weather.moisture_band(float(soil.get("moisture", 55.0)))
         if has_environment else None
     )
-    current_multiplier = (
-        _timing_multiplier_for_band(plot, current_band, now, observations)
-        if current_band is not None else 1.0
-    )
+    current_multiplier = _current_timing_multiplier(plot, now, observations)
     dry_multiplier = (
         _timing_multiplier_for_band(plot, "dry", now, observations)
         if has_environment else 1.0
@@ -3074,6 +3104,31 @@ def _backfill_coop_state(state: dict, now: datetime) -> bool:
     return changed
 
 
+def _backfill_compost_state(state: dict) -> bool:
+    """第九版：旧批次按"units=鸡粪份数、48 小时到期"记账；新口径是
+    "units=将来出的肥料份数"，鸡粪份数挪进新增的 manure_units 留痕
+    （设计稿第九版第一节）。惰性、幂等：只处理缺 manure_units 的批次，
+    已迁移过的原样跳过；ready_at 不动，旧批次仍按当时的 48 小时到期，
+    不追溯延长。"""
+    compost = state.get("compost")
+    if not isinstance(compost, dict):
+        return False
+    batches = compost.get("batches")
+    if not isinstance(batches, list):
+        return False
+    changed = False
+    for batch in batches:
+        if not isinstance(batch, dict) or "manure_units" in batch:
+            continue
+        old_units = batch.get("units")
+        if isinstance(old_units, bool) or not isinstance(old_units, int):
+            old_units = 0
+        batch["manure_units"] = old_units
+        batch["units"] = max(1, old_units // MANURE_PER_FERTILIZER)
+        changed = True
+    return changed
+
+
 def _normalize_v4_state(data: dict, now: datetime, rng) -> dict:
     source_version = data.get("version")
     if source_version not in (3, LEGACY_STATE_VERSION, STATE_VERSION):
@@ -3116,6 +3171,7 @@ def _normalize_v4_state(data: dict, now: datetime, rng) -> dict:
         state["journal"].setdefault(key, default)
     backfilled = _backfill_v5_soil_fields(state)
     backfilled = _backfill_coop_state(state, now) or backfilled
+    backfilled = _backfill_compost_state(state) or backfilled
     _validate_crop_state(state)
     layout_changed = _ensure_plot_layout(state)
     if source_version == LEGACY_STATE_VERSION and real_environment_enabled():
@@ -3512,6 +3568,7 @@ def coop_snapshot(*, now: datetime | None = None, path: Path | None = None) -> d
             {
                 "batch_id": batch["batch_id"],
                 "units": int(batch.get("units", 0)),
+                "manure_units": int(batch.get("manure_units", 0)),
                 "remaining_seconds": max(0, int((
                     _parse_iso(batch["ready_at"], field="堆肥批次到期时间") - now
                 ).total_seconds())),
@@ -3592,21 +3649,33 @@ def care_chicken(
             # _find_chicken（那个是"找一只具体的鸡"的语义，跟打扫不搭）。
             if not state["coop"]["built"]:
                 raise GardenError("鸡舍要等小动物送来鸡蛋、并决定孵化后才会搭起来")
-            _settle_coop_byproducts(state, now)
+            changed = _settle_coop_byproducts(state, now)
             manure = state["coop"]["manure"]
             units = int(manure.get("units", 0))
-            if units > 0:
-                manure["units"] = 0
-                batch_id = uuid.uuid4().hex
-                ready_at = now + COMPOST_READY_AFTER
-                compost = state.setdefault("compost", {"batches": []})
-                compost.setdefault("batches", []).append({
-                    "batch_id": batch_id, "units": units, "ready_at": ready_at.isoformat(),
-                })
+            # 第九版：不足一堆（6 份）沤不成肥，拒绝分支不改任何状态——
+            # 结算好的时间账照旧落盘，跟施肥拒绝分支同款写法。
+            if units < MANURE_PER_FERTILIZER:
+                if changed:
+                    _write_state_unlocked(state, path)
+                raise GardenError(f"鸡粪还没攒够一堆（{units}/{MANURE_PER_FERTILIZER}），沤不成肥，再等等")
+            # 通式：只收走能整堆折算的部分，零头留在鸡舍——当前 MANURE_CAP
+            # 恰好等于 MANURE_PER_FERTILIZER，等价于"攒满才能扫、一扫出一
+            # 份"；写成通式是为了以后上限调高不用改这里。
+            swept = units - units % MANURE_PER_FERTILIZER
+            manure["units"] = units - swept
+            fertilizer_units = swept // MANURE_PER_FERTILIZER
+            batch_id = uuid.uuid4().hex
+            ready_at = now + COMPOST_READY_AFTER
+            compost = state.setdefault("compost", {"batches": []})
+            compost.setdefault("batches", []).append({
+                "batch_id": batch_id, "units": fertilizer_units,
+                "manure_units": swept, "ready_at": ready_at.isoformat(),
+            })
             _write_state_unlocked(state, path)
             return {
                 "action": action,
-                "units": units,
+                "units": swept,
+                "fertilizer_units": fertilizer_units,
                 "weather_mode": _animal_weather_mode(observations, now),
             }
         chick = _find_chicken(state["coop"], selector)
@@ -4365,6 +4434,8 @@ def plant_crop(crop_name: str, plot_selector: str | None = None, *, now: datetim
             "watering_by_date": {}, "ready_at": None,
             "yield_penalty": 0, "status": "growing",
             "cycle_id": uuid.uuid4().hex, "stage_events_seen": [],
+            # 第九版：追肥次数随这一茬计数，播种即置 0（设计稿第九版第一节）。
+            "fertilize_count": 0,
         })
         if state.get("version") == STATE_VERSION:
             plot.update({
@@ -4848,23 +4919,29 @@ def resolve_crop_condition(
 
 
 def fertilize_plot(plot_selector: str | None = None, *, now: datetime | None = None, path: Path | None = None) -> dict:
-    """第八版施肥：按确定性优先级分流（设计稿第二节）。
+    """施肥：按确定性优先级分流（第八版设计稿第二节 + 第九版设计稿第二节）。
 
     1. 该地块有 active 的 ``nutrient_deficiency`` 异常 → 治缺肥：先扣肥料
        ×1（不足则报错、不改任何状态），扣成功后复用
        ``_apply_condition_resolution``（跟 ``resolve_crop_condition`` 走
        同一套结算与冷却写法）。
-    2. 无缺肥异常，但 ``quality=='poor'`` 且成因是内涝（``quality_cause
+    2. 有别的 active 异常 → 报错指路正确动作，不扣肥料。
+    3. 无缺肥异常，但 ``quality=='poor'`` 且成因是内涝（``quality_cause
        == 'flood'``）、地里还是 growing/ready、且没有其他 active 异常：
        还在浸泡就拒绝（不扣肥料）；退水后扣肥料×1、清掉品质与成因、写手账。
-    3. ``quality=='poor'`` 但成因是人祸（``condition``）或未知（旧档
-       ``None``）→ 品相已经定了，肥料救不回来；不算错误，是正常结果，
-       不扣肥料（设计取舍：欠佳标记不能洗白，唯一例外是内涝天灾）。
-    4. 其余情况（plot 没有缺肥异常也不是 poor）→ 用不上肥料，报错、不扣肥料。
+    4. 第九版新增：``status=='growing'``（此时已保证无 active 异常）→
+       追肥，扣肥料×1，把剩余生长时间砍掉一成（``FERTILIZE_BOOST_RATIO``），
+       每茬最多 ``FERTILIZE_MAX_PER_CYCLE`` 次；品相欠佳但 growing 的地
+       也走这条，肥料催长跟品相无关。
+    5. ``quality=='poor'``（走到这里只剩 ready 的地）但成因是人祸
+       （``condition``）或未知（旧档 ``None``）→ 品相已经定了，肥料救不
+       回来；不算错误，是正常结果，不扣肥料（设计取舍：欠佳标记不能洗
+       白，唯一例外是内涝天灾）。
+    6. 其余情况（ready 且正常 / withered）→ 用不上肥料，报错、不扣肥料。
 
-    三条硬性报错（需要肥料×1 / 地还泡着 / 用不上肥料）都是拒绝分支，绝不
-    改动任何状态、绝不扣肥料——跟"清理"/"除虫"等既有异常动作的报错模式
-    一致，见 GardenError 使用惯例。
+    硬性报错（需要肥料×1 / 地还泡着 / 追肥已到上限 / 用不上肥料）都是拒绝
+    分支，绝不改动任何状态、绝不扣肥料——跟"清理"/"除虫"等既有异常动作的
+    报错模式一致，见 GardenError 使用惯例。
     """
     path = path or GARDEN_FILE
     now = calendar_context(now or datetime.now(TZ)).now
@@ -4874,13 +4951,17 @@ def fertilize_plot(plot_selector: str | None = None, *, now: datetime | None = N
         changed = _settle_crops(state, now, observations=observations) or bool(state.get("_migrated"))
         # 选地走 resolve_crop_condition 同一套共享规则（设计稿第二节第4点
         # "不另起炉灶"）；施肥的"值得处理"谓词比通用动作宽一档——欠佳
-        # 标记的地也算（可救/救不回都是施肥的正常去处），否则"全院健康、
-        # 只有一块内涝欠佳"时不带编号的施肥永远选不中它。
+        # 标记的地、以及第九版新增的"生长中还能追肥"的地都算，否则"全院
+        # 健康、只有一块内涝欠佳/只有一块能追肥"时不带编号的施肥永远选不中它。
         plot = _pick_plot_for_treatment(
             state, plot_selector, changed=changed, path=path,
             relevant=lambda candidate: (
                 _active_condition(candidate) is not None
                 or candidate.get("quality") == "poor"
+                or (
+                    candidate.get("status") == "growing"
+                    and int(candidate.get("fertilize_count", 0)) < FERTILIZE_MAX_PER_CYCLE
+                )
             ),
         )
 
@@ -4893,7 +4974,8 @@ def fertilize_plot(plot_selector: str | None = None, *, now: datetime | None = N
                 if changed:
                     _write_state_unlocked(state, path)
                 raise GardenError(
-                    "施肥需要肥料×1，现在还没有肥料——可以先「打扫鸡舍」攒堆肥，发酵两天就有了"
+                    "施肥需要肥料×1，现在还没有肥料——可以先「打扫鸡舍」攒堆肥，"
+                    "六份鸡粪沤三天出一份肥料"
                 )
             _inventory_take(inventory, "fertilizer", "fertilizer", 1)
 
@@ -4951,6 +5033,40 @@ def fertilize_plot(plot_selector: str | None = None, *, now: datetime | None = N
                 "kind": "quality_rescue",
                 "plot_id": plot["plot_id"],
                 "crop_id": plot["crop_id"],
+            }
+            _write_state_unlocked(state, path)
+            return result
+
+        if plot.get("status") == "growing":
+            # 第九版：追肥——此时已保证无 active 异常（前两条分支已经拦
+            # 下）。品相欠佳但 growing 的地也走这条，肥料催长跟品相无关，
+            # 文案不许暗示品相变化（设计稿第九版第二节第4点）。
+            fertilize_count = int(plot.get("fertilize_count", 0))
+            if fertilize_count >= FERTILIZE_MAX_PER_CYCLE:
+                if changed:
+                    _write_state_unlocked(state, path)
+                raise GardenError(f"这茬已经追过 {FERTILIZE_MAX_PER_CYCLE} 次肥，再施也吸收不了了")
+            _take_fertilizer_or_raise()
+            crop = garden_crops.CROPS[plot["crop_id"]]
+            target = float(crop["growth_days"])
+            bonus = (target - float(plot["growth_points"])) * FERTILIZE_BOOST_RATIO
+            _apply_growth(state, plot, bonus, ready_at=now)
+            fertilize_count += 1
+            plot["fertilize_count"] = fertilize_count
+            ripened = plot.get("status") == "ready"
+            estimated_ready_at = None
+            if not ripened:
+                multiplier = _current_timing_multiplier(plot, now, observations)
+                projected = _project_crop_ready_at(plot, now, multiplier=multiplier)
+                estimated_ready_at = projected.isoformat() if projected is not None else None
+            result = {
+                "kind": "growth_boost",
+                "plot_id": plot["plot_id"],
+                "crop_id": plot["crop_id"],
+                "fertilize_count": fertilize_count,
+                "remaining_uses": FERTILIZE_MAX_PER_CYCLE - fertilize_count,
+                "ripened": ripened,
+                "estimated_ready_at": estimated_ready_at,
             }
             _write_state_unlocked(state, path)
             return result

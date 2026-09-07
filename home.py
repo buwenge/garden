@@ -258,7 +258,8 @@ home 院子 把辣椒种到三号地
 home 院子 全部浇水 / 给二号地浇点水
 home 院子 收获二号地
 有异常时直接说：给二号地除虫、修剪、松土、施肥或清理。
-施肥要消耗肥料×1（打扫鸡舍攒堆肥获得）；退水后给内涝欠佳的地施肥能救回品相。
+施肥要消耗肥料×1（打扫鸡舍攒堆肥获得，六份鸡粪沤三天出一份肥料）：
+治缺肥、退水后救内涝欠佳的地块，或给生长中的作物追肥（每茬最多5次，每次快一成）。
 home 院子 现在能种什么（查当季能种的种子）
 home 院子 仓库（看不是当季、暂存起来的种子）""",
         "animal": """动物：
@@ -270,8 +271,8 @@ home 院子 取名 <动物名字或编号> <新名字>
 小动物送来鸡蛋后可说：我来孵那三枚蛋 / 吃掉那三枚蛋。
 选择孵化时才会搭起鸡舍；之后可说：查看鸡舍。
 母鸡偶尔会下出可孵化鸡蛋，可说：孵化可孵化鸡蛋。
-成鸡每天会攒鸡粪，可说：打扫鸡舍——收走的鸡粪发酵两天变成肥料，
-给有缺肥异常的地施肥能治好，退水后也能救回内涝欠佳的地块。""",
+成鸡每天会攒鸡粪，可说：打扫鸡舍——六份鸡粪沤三天出一份肥料。
+施肥三用：治缺肥、退水后救内涝欠佳的地块、给生长中的作物追肥（每茬最多5次）。""",
     }
     if topic in pages:
         return pages[topic]
@@ -804,7 +805,10 @@ def _garden_coop_manure_suffix(coop: dict) -> str:
         seconds = int(batch.get("remaining_seconds") or 0)
         hours, remainder = divmod(seconds, 3600)
         minutes = remainder // 60
-        parts.append(f"堆肥角：{int(batch.get('units', 0))}份发酵中，约剩{hours}小时{minutes}分")
+        parts.append(
+            f"堆肥角：鸡粪×{int(batch.get('manure_units', 0))}发酵中，"
+            f"约剩{hours}小时{minutes}分，出肥料×{int(batch.get('units', 0))}"
+        )
     fertilizer_count = int(coop.get("fertilizer_count") or 0)
     if fertilizer_count > 0:
         parts.append(f"肥料×{fertilizer_count}")
@@ -1196,13 +1200,15 @@ def _garden_crop_treatment_text(
 
 
 def _garden_fertilize_result_text(result: dict) -> str:
-    """施肥的三种正常结果落回文案。
+    """施肥的正常结果落回文案（第八版品质救援 + 第九版追肥）。
 
     ``kind == "condition"``：治缺肥成功，跟既有 resolve_crop_condition 的
     resolved 结果形状完全一致，直接复用 `_garden_crop_treatment_text` 与
     既有成功文案池（garden_content 里 nutrient_deficiency 的既有文案，不
-    重写）。另外两种是品质救援结果，用新文案池；三种都不是错误——硬性
-    拒绝（需要肥料×1/地还泡着/用不上肥料）走 GardenError，不经过这里。
+    重写）。``quality_rescue``/``quality_unrecoverable`` 是第八版品质救援
+    结果，``growth_boost`` 是第九版追肥结果，各用各的文案池；都不是
+    错误——硬性拒绝（需要肥料×1/地还泡着/追肥已到上限/用不上肥料）走
+    GardenError，不经过这里。
     """
     if result["kind"] == "condition":
         outing = _garden_claim_outing()
@@ -1215,6 +1221,21 @@ def _garden_fertilize_result_text(result: dict) -> str:
     if result["kind"] == "quality_rescue":
         body = _garden_action_text("fertilize_rescue", plot=plot, name=name)
         return _garden_with_outing(f"{body}\n结果：{plot}地的{name}品质已经救回，不再是欠佳。")
+    if result["kind"] == "growth_boost":
+        body = _garden_action_text("fertilize_boost", plot=plot, name=name)
+        if result["ripened"]:
+            tail = f"结果：{plot}地的{name}这一下直接催熟了，可以收获。"
+        else:
+            estimated_ready_at = result.get("estimated_ready_at")
+            ready_text = (
+                datetime.fromisoformat(estimated_ready_at).astimezone(TZ).strftime("%m月%d日 %H:%M")
+                if estimated_ready_at else "暂时估不出来"
+            )
+            tail = (
+                f"结果：{plot}地的{name}这茬已追肥{result['fertilize_count']}"
+                f"/{garden.FERTILIZE_MAX_PER_CYCLE}次，预计{ready_text}熟。"
+            )
+        return _garden_with_outing(f"{body}\n{tail}")
     body = _garden_action_text("fertilize_unrecoverable", plot=plot, name=name)
     return _garden_with_outing(f"{body}\n结果：{plot}地状态未改变，品相仍是欠佳。")
 
@@ -1802,11 +1823,16 @@ def handle_garden(request: Request) -> str:
                 return "将打扫鸡舍，把攒下的鸡粪收进堆肥角"
             result = garden.care_chicken(None, "clean")
             units = result["units"]
+            fertilizer_units = result["fertilizer_units"]
             log_store.write_log("info", "activity", f"小院子：打扫鸡舍，收走鸡粪×{units}")
-            if units <= 0:
-                return _garden_with_outing(_garden_action_text("coop_clean_empty"))
+            # 第九版起 care_chicken(clean) 不足一堆（MANURE_PER_FERTILIZER）
+            # 已经在 garden.py 里直接 raise，不会再返回 units<=0 的结果，
+            # 这里不用再兜底判断（旧版 coop_clean_empty 分支已删，文案池
+            # 保留不动，以防以后又有别的路数复用）。
             body = _garden_action_text("coop_clean", units=units)
-            return _garden_with_outing(f"{body}\n结果：鸡粪×{units}已经收进堆肥角，约两天发酵好。")
+            return _garden_with_outing(
+                f"{body}\n结果：鸡粪×{units}已经收进堆肥角，约三天沤出肥料×{fertilizer_units}。"
+            )
         if text == "建鸡舍":
             coop = garden.coop_snapshot()
             if coop["built"]:
